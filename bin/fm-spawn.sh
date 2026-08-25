@@ -3033,13 +3033,23 @@ if [ "$HARNESS" = copilot ] && copilot_session_bound; then
   # gate just used, and a mismatch is reported loudly rather than failing the
   # spawn, because the worker is already doing real work by this point. A model
   # that never appears within the budget is skipped for the same reason.
+  # Reading the model needs jq, because the value has to come from the record's
+  # own top-level field - a byte match would fire on a model id quoted in
+  # assistant prose. jq is genuinely optional on a tmux home (it is absent from
+  # bootstrap's common tool set and required only by the herdr, zellij, and cmux
+  # backends), so the check can be unavailable on a supported host. It says so
+  # rather than passing silently, because an operator who is not told assumes
+  # the protection ran.
   COPILOT_MODEL_LOG=$(copilot_events_log || true)
-  if [ -n "$MODEL" ] && [ "$MODEL" != default ] && [ -n "$COPILOT_MODEL_LOG" ] \
-    && command -v jq >/dev/null 2>&1; then
-    COPILOT_EFFECTIVE_MODEL=$(fm_busy_copilot_wait_for_effective_model \
-      "$COPILOT_MODEL_LOG" "${FM_COPILOT_MODEL_POLLS:-15}" "${FM_COPILOT_POLL_INTERVAL:-1}" || true)
-    if [ -n "$COPILOT_EFFECTIVE_MODEL" ] && [ "$COPILOT_EFFECTIVE_MODEL" != "$MODEL" ]; then
-      echo "warning: copilot task $ID requested model '$MODEL' but is running '$COPILOT_EFFECTIVE_MODEL'; copilot substitutes a model the account cannot reach instead of refusing. Check the id against this account's /model list." >&2
+  if [ -n "$MODEL" ] && [ "$MODEL" != default ] && [ -n "$COPILOT_MODEL_LOG" ]; then
+    if command -v jq >/dev/null 2>&1; then
+      COPILOT_EFFECTIVE_MODEL=$(fm_busy_copilot_wait_for_effective_model \
+        "$COPILOT_MODEL_LOG" "${FM_COPILOT_MODEL_POLLS:-15}" "${FM_COPILOT_POLL_INTERVAL:-1}" || true)
+      if [ -n "$COPILOT_EFFECTIVE_MODEL" ] && [ "$COPILOT_EFFECTIVE_MODEL" != "$MODEL" ]; then
+        echo "warning: copilot task $ID requested model '$MODEL' but is running '$COPILOT_EFFECTIVE_MODEL'; copilot substitutes a model the account cannot reach instead of refusing. Check the id against this account's /model list." >&2
+      fi
+    else
+      echo "notice: copilot task $ID requested model '$MODEL' but jq is not installed on this host, so the model it is actually running was NOT checked; copilot substitutes a model the account cannot reach instead of refusing, and a substitution can bill a far more expensive class than dispatch chose. Install jq to restore the check." >&2
     fi
   fi
 fi

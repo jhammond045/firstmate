@@ -690,6 +690,12 @@ fm_busy_cursor_transcript() {  # <state-dir> <id>
 # records that open and close a turn; _fm_busy_jsonl_turn_fold below is what
 # reduces this stream to a verdict.
 #
+# A duplicate key is decided by its LAST occurrence, which is what jq's fromjson
+# does. Each lifecycle flag is therefore ASSIGNED on every occurrence of its key
+# rather than latched on the first match, and a repeated qualifier parent clears
+# the nested verdict before its replacement is read. A latched flag would let an
+# earlier occurrence win and split the two arms on the same bytes.
+#
 # A composite value reports its OWN kind on return, never its last element's:
 # array() restores kind/value at its closing bracket exactly as object() does at
 # its closing brace. Without that an array-valued lifecycle field would be read
@@ -827,13 +833,14 @@ _fm_busy_jsonl_turn_events() {  # <qualifier> <open-key> <open-value> <close-key
           key = value; ws()
           if (substr(line, p, 1) != ":") return 0
           p++; ws()
+          if (depth == 0 && qparent != "" && key == qparent) qual = 0
           pkey[depth] = key
           if (!json(depth + 1)) return 0
           vkind = kind; vvalue = value
-          if (depth == 0 && key == ckey && vkind == "string" && (vvalue in closeset)) is_close = 1
-          if (depth == 0 && key == okey && vkind == "string" && vvalue == oval) is_open = 1
-          if (depth == 1 && qparent != "" && pkey[0] == qparent && key == qchild \
-              && vkind == "string" && (vvalue in qualset)) qual = 1
+          if (depth == 0 && key == ckey) is_close = (vkind == "string" && (vvalue in closeset))
+          if (depth == 0 && key == okey) is_open = (vkind == "string" && vvalue == oval)
+          if (depth == 1 && qparent != "" && pkey[0] == qparent && key == qchild) \
+            qual = (vkind == "string" && (vvalue in qualset))
           ws(); c = substr(line, p, 1)
           if (c == "}") {
             p++; kind = "object"; value = ""

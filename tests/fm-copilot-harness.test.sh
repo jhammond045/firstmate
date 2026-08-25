@@ -335,6 +335,39 @@ a=$(fm_busy_copilot_abort_count "$L"); b=$(no_jq fm_busy_copilot_abort_count "$L
 [ "$a" = 1 ] || fail "a real reason must still count when a composite sibling follows it (got '$a')"
 pass "busy: a composite lifecycle value never matches, and both arms agree it does not"
 
+# A duplicate top-level key is decided by its LAST occurrence, because that is
+# what jq's fromjson does. A flag latched on the first match would let an earlier
+# occurrence win, and the two arms would split on identical bytes.
+L=$(write_events "$CB/home" s-dup-close-first < <( { ev_turn_start 0; printf '{"type":"assistant.turn_end","type":"assistant.message","id":"e1"}\n'; } ))
+a=$(fm_busy_copilot_turn_state "$L"); b=$(no_jq fm_busy_copilot_turn_state "$L")
+[ "$a" = "$b" ] || fail "the arms disagree when an earlier duplicate type closes ($a vs $b)"
+[ "$a" = busy ] || fail "a later duplicate type that does not close must leave the turn open (got '$a')"
+
+L=$(write_events "$CB/home" s-dup-close-last < <( { ev_turn_start 0; printf '{"type":"assistant.message","type":"assistant.turn_end","id":"e2"}\n'; } ))
+a=$(fm_busy_copilot_turn_state "$L"); b=$(no_jq fm_busy_copilot_turn_state "$L")
+[ "$a" = "$b" ] || fail "the arms disagree when a later duplicate type closes ($a vs $b)"
+[ "$a" = settled ] || fail "a later duplicate type that closes must close the turn (got '$a')"
+
+# The same last-wins rule on the qualifier, which is what the cancellation count
+# rides on.
+L=$(write_events "$CB/home" s-dup-reason-first < <( { ev_turn_start 0; printf '{"type":"abort","data":{"reason":"user_initiated","reason":"context_limit"},"id":"e3"}\n'; } ))
+a=$(fm_busy_copilot_abort_count "$L"); b=$(no_jq fm_busy_copilot_abort_count "$L")
+[ "$a" = "$b" ] || fail "the arms disagree when an earlier duplicate reason is user-initiated ($a vs $b)"
+[ "$a" = 0 ] || fail "a later duplicate reason must override an earlier user-initiated one (got '$a')"
+
+L=$(write_events "$CB/home" s-dup-reason-last < <( { ev_turn_start 0; printf '{"type":"abort","data":{"reason":"context_limit","reason":"user_initiated"},"id":"e4"}\n'; } ))
+a=$(fm_busy_copilot_abort_count "$L"); b=$(no_jq fm_busy_copilot_abort_count "$L")
+[ "$a" = "$b" ] || fail "the arms disagree when a later duplicate reason is user-initiated ($a vs $b)"
+[ "$a" = 1 ] || fail "a later duplicate reason that is user-initiated must count (got '$a')"
+
+# A duplicate qualifier PARENT is decided the same way: the last data object
+# stands, even when it carries no reason at all.
+L=$(write_events "$CB/home" s-dup-parent < <( { ev_turn_start 0; printf '{"type":"abort","data":{"reason":"user_initiated"},"data":{"note":"x"},"id":"e5"}\n'; } ))
+a=$(fm_busy_copilot_abort_count "$L"); b=$(no_jq fm_busy_copilot_abort_count "$L")
+[ "$a" = "$b" ] || fail "the arms disagree when a later duplicate data drops the reason ($a vs $b)"
+[ "$a" = 0 ] || fail "a later duplicate data without a reason must override an earlier one (got '$a')"
+pass "busy: a duplicate key is decided by its last occurrence, and both arms agree which"
+
 # --- effective model --------------------------------------------------------
 
 # The substitution warning's whole correctness is about WHEN the model is read.
