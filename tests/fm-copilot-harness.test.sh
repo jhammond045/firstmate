@@ -298,6 +298,43 @@ log=$(write_events "$CB/home" s-abort-foreign < <( { ev_turn_start 0; printf '{"
   || fail "the awk arm must also require the reason to sit under data"
 pass "busy: any abort closes the turn, but only a user-initiated one is a cancellation"
 
+# A lifecycle field whose value is a COMPOSITE must never match, and the two
+# arms must say so identically. The awk arm parses arrays element by element, so
+# a value that is not restored on the way out leaves the last ELEMENT standing
+# where the array should be - and an array ending in a lifecycle string would
+# then close a turn, or be counted as a landed cancellation, on exactly the
+# hosts that have no jq to disagree.
+L=$(write_events "$CB/home" s-arr-type < <( printf '{"type":["assistant.turn_end"],"id":"d1"}\n' ))
+bind_task "$CB/state" t-arr-type "$CB/home" s-arr-type
+a=$(fm_busy_copilot_turn_state "$L"); b=$(no_jq fm_busy_copilot_turn_state "$L")
+[ "$a" = "$b" ] || fail "the arms disagree on an array-valued type ($a vs $b)"
+[ "$a" = none ] || fail "an array-valued type must not close a turn (got '$a')"
+
+L=$(write_events "$CB/home" s-obj-type < <( printf '{"type":{"name":"assistant.turn_end"},"id":"d2"}\n' ))
+a=$(fm_busy_copilot_turn_state "$L"); b=$(no_jq fm_busy_copilot_turn_state "$L")
+[ "$a" = "$b" ] || fail "the arms disagree on an object-valued type ($a vs $b)"
+[ "$a" = none ] || fail "an object-valued type must not close a turn (got '$a')"
+
+# The same hole reached through the qualifier, which is what the cancellation
+# count rides on.
+L=$(write_events "$CB/home" s-arr-reason < <( { ev_turn_start 0; printf '{"type":"abort","data":{"reason":["user_initiated"]},"id":"d3"}\n'; } ))
+a=$(fm_busy_copilot_abort_count "$L"); b=$(no_jq fm_busy_copilot_abort_count "$L")
+[ "$a" = "$b" ] || fail "the arms disagree on an array-valued reason ($a vs $b)"
+[ "$a" = 0 ] || fail "an array-valued reason must not be counted as a cancellation (got '$a')"
+
+L=$(write_events "$CB/home" s-obj-reason < <( { ev_turn_start 0; printf '{"type":"abort","data":{"reason":{"kind":"user_initiated"}},"id":"d4"}\n'; } ))
+a=$(fm_busy_copilot_abort_count "$L"); b=$(no_jq fm_busy_copilot_abort_count "$L")
+[ "$a" = "$b" ] || fail "the arms disagree on an object-valued reason ($a vs $b)"
+[ "$a" = 0 ] || fail "an object-valued reason must not be counted as a cancellation (got '$a')"
+
+# A real reason followed by a composite SIBLING must still qualify: the sibling
+# is parsed after the match, so restoring its kind must not undo the verdict.
+L=$(write_events "$CB/home" s-sibling < <( { ev_turn_start 0; printf '{"type":"abort","data":{"reason":"user_initiated","tags":["x","y"]},"id":"d5"}\n'; } ))
+a=$(fm_busy_copilot_abort_count "$L"); b=$(no_jq fm_busy_copilot_abort_count "$L")
+[ "$a" = "$b" ] || fail "the arms disagree when a composite sibling follows the reason ($a vs $b)"
+[ "$a" = 1 ] || fail "a real reason must still count when a composite sibling follows it (got '$a')"
+pass "busy: a composite lifecycle value never matches, and both arms agree it does not"
+
 # --- effective model --------------------------------------------------------
 
 # The substitution warning's whole correctness is about WHEN the model is read.

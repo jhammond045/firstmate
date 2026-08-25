@@ -2322,6 +2322,32 @@ kimi_wait_for_delivery() {
   return 1
 }
 
+# 0 when THIS spawn pinned copilot's session itself. Only the template path
+# resolves the home and chooses the session id, so a raw launch command - the
+# documented escape hatch for an unverified adapter - is legitimately unbound:
+# it has no event log to poll, no effective model to read back, and no sidecar
+# to write. Every consumer of the binding asks this rather than testing the
+# harness NAME, because the name is set on both paths and the binding is not.
+copilot_session_bound() {
+  [ -n "${COPILOT_HOME_DIR:-}" ] && [ -n "${COPILOT_SESSION_ID:-}" ]
+}
+
+# The path of the event log this spawn's own session writes, or failure when
+# nothing was pinned. The layout is copilot's, and --session-id is what makes it
+# a direct lookup rather than a search.
+copilot_events_log() {
+  copilot_session_bound || return 1
+  printf '%s/session-state/%s/events.jsonl' "$COPILOT_HOME_DIR" "$COPILOT_SESSION_ID"
+}
+
+# 0 once the launch brief is a running turn in this session's own event log.
+copilot_turn_started() {
+  local log
+  log=$(copilot_events_log) || return 1
+  [ -f "$log" ] || return 1
+  LC_ALL=C grep -aq '"assistant\.turn_start"' "$log"
+}
+
 # copilot launch gate.
 #
 # The postcondition is STRUCTURAL rather than rendered: copilot's own event log
@@ -2340,29 +2366,6 @@ kimi_wait_for_delivery() {
 # instant even without the dialog (copilot blocks on MCP server startup while it
 # loads instructions, plugins, hooks and skills), which is why the budget is
 # generous and the nudge is spaced rather than tight.
-# 0 when THIS spawn pinned copilot's session itself. Only the template path
-# resolves the home and chooses the session id, so a raw launch command - the
-# documented escape hatch for an unverified adapter - is legitimately unbound:
-# it has no event log to poll, no effective model to read back, and no sidecar
-# to write. Every consumer of the binding asks this rather than testing the
-# harness NAME, because the name is set on both paths and the binding is not.
-copilot_session_bound() {
-  [ -n "${COPILOT_HOME_DIR:-}" ] && [ -n "${COPILOT_SESSION_ID:-}" ]
-}
-
-copilot_events_log() {
-  copilot_session_bound || return 1
-  printf '%s/session-state/%s/events.jsonl' "$COPILOT_HOME_DIR" "$COPILOT_SESSION_ID"
-}
-
-# 0 once the launch brief is a running turn in this session's own event log.
-copilot_turn_started() {
-  local log
-  log=$(copilot_events_log) || return 1
-  [ -f "$log" ] || return 1
-  LC_ALL=C grep -aq '"assistant\.turn_start"' "$log"
-}
-
 copilot_wait_for_delivery() {
   local i=0 max=${FM_COPILOT_DELIVERY_POLLS:-90} interval=${FM_COPILOT_POLL_INTERVAL:-1}
   local nudge=${FM_COPILOT_NUDGE_EVERY:-5}
@@ -2377,12 +2380,9 @@ copilot_wait_for_delivery() {
   copilot_turn_started
 }
 
-copilot_spawn_fail() {  # <detail>
-  printf 'failed: %s\n' "$1" >> "$STATE/$ID.status"
-  echo "error: $1; inspect window $T" >&2
-}
-
-kimi_spawn_fail() {  # <detail>
+# Record a post-launch gate failure for any adapter: the detail string its
+# caller passes already names the harness and what was not proven.
+spawn_harness_fail() {  # <detail>
   printf 'failed: %s\n' "$1" >> "$STATE/$ID.status"
   echo "error: $1; inspect window $T" >&2
 }
@@ -3022,7 +3022,7 @@ fi
 spawn_send_key "$T" Enter
 if [ "$HARNESS" = copilot ] && copilot_session_bound; then
   if ! copilot_wait_for_delivery; then
-    copilot_spawn_fail "copilot did not start a turn on the launch brief"
+    spawn_harness_fail "copilot did not start a turn on the launch brief"
     exit 1
   fi
   # copilot SILENTLY downgrades a model the account cannot reach - it prints
@@ -3045,7 +3045,7 @@ if [ "$HARNESS" = copilot ] && copilot_session_bound; then
 fi
 if [ "$HARNESS" = kimi ]; then
   if ! kimi_wait_for_ready; then
-    kimi_spawn_fail "kimi did not show a verified ready signal before brief delivery"
+    spawn_harness_fail "kimi did not show a verified ready signal before brief delivery"
     exit 1
   fi
   KIMI_POINTER="Read the brief at $BRIEF_REAL and follow it exactly."
@@ -3055,15 +3055,15 @@ if [ "$HARNESS" = kimi ]; then
   KIMI_SUBMIT_VERDICT=$(fm_backend_send_text_submit \
     "$BACKEND" "$T" "$KIMI_POINTER" "$KIMI_SUBMIT_RETRIES" \
     "$KIMI_SUBMIT_SLEEP" "$KIMI_SUBMIT_SETTLE" "$W") || {
-    kimi_spawn_fail "kimi brief pointer could not be submitted"
+    spawn_harness_fail "kimi brief pointer could not be submitted"
     exit 1
   }
   if [ "$KIMI_SUBMIT_VERDICT" = send-failed ]; then
-    kimi_spawn_fail "kimi brief pointer could not be submitted"
+    spawn_harness_fail "kimi brief pointer could not be submitted"
     exit 1
   fi
   if ! kimi_wait_for_delivery; then
-    kimi_spawn_fail "kimi brief pointer delivery was not confirmed"
+    spawn_harness_fail "kimi brief pointer delivery was not confirmed"
     exit 1
   fi
 fi

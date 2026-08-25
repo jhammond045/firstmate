@@ -690,6 +690,12 @@ fm_busy_cursor_transcript() {  # <state-dir> <id>
 # records that open and close a turn; _fm_busy_jsonl_turn_fold below is what
 # reduces this stream to a verdict.
 #
+# A composite value reports its OWN kind on return, never its last element's:
+# array() restores kind/value at its closing bracket exactly as object() does at
+# its closing brace. Without that an array-valued lifecycle field would be read
+# as whatever string it happened to end with, and the two arms would disagree on
+# the same bytes - jq rejects a non-string, awk would have matched it.
+#
 # Lifecycle records are matched on TOP-LEVEL fields of structurally valid JSON,
 # which is the property that makes the source trustworthy: a turn whose own
 # assistant text quotes the close string cannot close it. The jq arm is used
@@ -803,11 +809,11 @@ _fm_busy_jsonl_turn_events() {  # <qualifier> <open-key> <open-value> <close-key
       }
       function array(depth,    c) {
         p++; ws()
-        if (substr(line, p, 1) == "]") { p++; return 1 }
+        if (substr(line, p, 1) == "]") { p++; kind = "array"; value = ""; return 1 }
         while (p <= n) {
           if (!json(depth + 1)) return 0
           ws(); c = substr(line, p, 1)
-          if (c == "]") { p++; return 1 }
+          if (c == "]") { p++; kind = "array"; value = ""; return 1 }
           if (c != ",") return 0
           p++; ws()
         }
@@ -815,7 +821,7 @@ _fm_busy_jsonl_turn_events() {  # <qualifier> <open-key> <open-value> <close-key
       }
       function object(depth,    c, key, vkind, vvalue, is_close, is_open) {
         p++; ws()
-        if (substr(line, p, 1) == "}") { p++; kind = "object"; return 1 }
+        if (substr(line, p, 1) == "}") { p++; kind = "object"; value = ""; return 1 }
         while (p <= n) {
           if (!string()) return 0
           key = value; ws()
