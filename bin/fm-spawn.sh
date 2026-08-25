@@ -3040,18 +3040,11 @@ if [ "$HARNESS" = copilot ] && copilot_session_bound; then
   # backends), so the check can be unavailable on a supported host. It says so
   # rather than passing silently, because an operator who is not told assumes
   # the protection ran.
-  # This check exists to catch copilot SILENTLY replacing a model the ACCOUNT
-  # CANNOT REACH with one it can. A requested value that was never a model id
-  # therefore cannot be substituted, and comparing it against the concrete id
-  # copilot resolved would report a substitution on every single spawn. Two such
-  # values exist here. `auto` is a documented --model value on 1.0.80 - `copilot
-  # --help` reads "use 'auto' to let Copilot pick automatically" - and it is the
-  # only non-id value that flag accepts. `default` is firstmate's own sentinel
-  # for "pass no --model at all" and is already excluded below. Neither is ever
-  # written back as data.model: across every events.jsonl on the verification
-  # machine the recorded ids are only gpt-5.4, gpt-5.3-codex, gpt-5.5, and
-  # claude-opus-5. `auto` is reported informationally instead of compared, so the
-  # operator still learns which class is billing.
+  # Which requested values can be substituted at all is decided ONCE, by
+  # fm_busy_copilot_model_is_substitutable in bin/fm-busy-lib.sh, which owns that
+  # rule and the reasoning behind it. It is asked BEFORE the wait, so a value
+  # that has no substitution to check for pays nothing and hears nothing: no
+  # blocking poll, and no notice framing an outcome as a substitution hazard.
   #
   # The budget is sized from real launches rather than guessed. The gate returns
   # on assistant.turn_start, but data.model rides the first session-owned
@@ -3063,7 +3056,7 @@ if [ "$HARNESS" = copilot ] && copilot_session_bound; then
   # observed with headroom and stays bounded; the wait returns the moment the
   # record lands, so a typical spawn pays the median rather than the budget.
   COPILOT_MODEL_LOG=$(copilot_events_log || true)
-  if [ -n "$MODEL" ] && [ "$MODEL" != default ] && [ -n "$COPILOT_MODEL_LOG" ]; then
+  if fm_busy_copilot_model_is_substitutable "$MODEL" && [ -n "$COPILOT_MODEL_LOG" ]; then
     COPILOT_MODEL_POLLS=${FM_COPILOT_MODEL_POLLS:-60}
     COPILOT_MODEL_INTERVAL=${FM_COPILOT_POLL_INTERVAL:-1}
     if command -v jq >/dev/null 2>&1; then
@@ -3071,8 +3064,6 @@ if [ "$HARNESS" = copilot ] && copilot_session_bound; then
         "$COPILOT_MODEL_LOG" "$COPILOT_MODEL_POLLS" "$COPILOT_MODEL_INTERVAL" || true)
       if [ -z "$COPILOT_EFFECTIVE_MODEL" ]; then
         echo "notice: copilot task $ID requested model '$MODEL' but no session message naming a model appeared within $COPILOT_MODEL_POLLS polls ${COPILOT_MODEL_INTERVAL}s apart, so the model it is actually running was NOT resolved and no substitution check ran; copilot substitutes a model the account cannot reach instead of refusing, and a substitution can bill a far more expensive class than dispatch chose. Raise FM_COPILOT_MODEL_POLLS if this task's first round is routinely slower." >&2
-      elif [ "$MODEL" = auto ]; then
-        echo "notice: copilot task $ID asked copilot to pick its own model and it selected '$COPILOT_EFFECTIVE_MODEL'; no substitution check applies, because 'auto' names no model to substitute for. Cost still scales with the class copilot picked." >&2
       elif [ "$COPILOT_EFFECTIVE_MODEL" != "$MODEL" ]; then
         echo "warning: copilot task $ID requested model '$MODEL' but is running '$COPILOT_EFFECTIVE_MODEL'; copilot substitutes a model the account cannot reach instead of refusing. Check the id against this account's /model list." >&2
       fi

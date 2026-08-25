@@ -1031,6 +1031,35 @@ fm_busy_copilot_turn_state() {  # <events-log>
     | _fm_busy_jsonl_turn_fold - type assistant.turn_start type assistant.turn_end abort
 }
 
+# fm_busy_copilot_model_is_substitutable: whether a requested --model value is
+# one copilot could silently substitute for. This is the ONE owner of that rule
+# and of why it exists, so a caller decides it once, before spending anything.
+#
+# The substitution hazard is specific: copilot replaces a model id the ACCOUNT
+# CANNOT REACH with one it can and carries on. Only a concrete model id can be
+# substituted that way, so a requested value that was never an id has no
+# substitution to check for, nothing to compare, and no protection that can go
+# missing. Comparing one against the concrete id copilot resolved would report a
+# substitution on every spawn, and reporting the comparison as skipped would
+# claim a missing protection that never applied.
+#
+# Three such values exist, for two different reasons.
+# - Empty and `default` are firstmate's OWN sentinels for "pass no --model at
+#   all", so copilot picks under its own defaults and no id was ever requested.
+# - `auto` is a real value of copilot 1.0.80's --model flag - `copilot --help`
+#   reads "use 'auto' to let Copilot pick automatically" - and it is the only
+#   non-id value that flag accepts. It asks copilot to choose, so the concrete
+#   id it resolves to is the answer, not a substitution for anything.
+# None of them is ever written back as data.model: across every events.jsonl on the
+# verification machine the recorded ids are only gpt-5.4, gpt-5.3-codex,
+# gpt-5.5, and claude-opus-5.
+fm_busy_copilot_model_is_substitutable() {  # <requested-model>
+  case "$1" in
+    '' | default | auto) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
 # fm_busy_copilot_effective_model: which model this session is actually running,
 # read from its own event log. Copilot SILENTLY downgrades a model the account
 # cannot reach, so the requested id is not the billed one.

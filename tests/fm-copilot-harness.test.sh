@@ -388,7 +388,7 @@ pass "busy: a duplicate key is decided by its last occurrence, and both arms agr
 
 # The qualifier gates the CLOSE test only, so a record that fails it falls
 # through to the OPEN test rather than becoming inert. That is invisible to
-# today's callers - the abort counter passes an open key nothing can match - but
+# today's callers - the abort counter passes an open value nothing can match - but
 # it is the contract the next adapter author wires against, so pin the verdict
 # both ways round through the classifier itself.
 cls() { printf '%s\n' "$2" | _fm_busy_jsonl_turn_events "$1" type abort type abort; }
@@ -413,6 +413,22 @@ a=$(inert); b=$(no_jq inert)
 pass "busy: the qualifier gates only the close test, and an unmatchable open value is what makes a failure inert"
 
 # --- effective model --------------------------------------------------------
+
+# Which requested values the substitution check applies to at all. The answer
+# gates the bounded wait AND every line the spawn prints about it, so a value
+# that names no model must be refused here rather than after the wait: a wrong
+# verdict either blocks a spawn for a check that cannot run or tells the
+# operator a cost protection went missing when none ever applied. `default` and
+# an empty value are firstmate's own "pass no --model" sentinels; `auto` is a
+# real 1.0.80 flag value that asks copilot to choose.
+fm_busy_copilot_model_is_substitutable gpt-5.4 \
+  || fail "a concrete model id is exactly what copilot can substitute for"
+for m in auto default ''; do
+  if fm_busy_copilot_model_is_substitutable "$m"; then
+    fail "'$m' names no model, so nothing can be substituted for it"
+  fi
+done
+pass "effective model: only a concrete model id is subject to the substitution check"
 
 # The substitution warning's whole correctness is about WHEN the model is read.
 # copilot writes assistant.message only once the first inference round
