@@ -398,22 +398,29 @@ interrupt_cancel_claim() {
     muse-session-terminal:?*|copilot-events-abort:?*) ;;
     *) printf 'unconfirmed'; return 0 ;;
   esac
+  # One probe per ack source, then ONE shared timing tail. A source whose probe
+  # is inconclusive falls through to it rather than carrying its own copy, so a
+  # third source cannot silently poll on a different budget than these two.
   while :; do
-    if [ "$INTERRUPT_ACK_SOURCE" = copilot-events-abort ]; then
-      aborts=$(fm_busy_copilot_abort_count "$INTERRUPT_ACK_LOG" 2>/dev/null || true)
-      case "$aborts" in
-        ''|*[!0-9]*) ;;
-        *) [ "$aborts" -gt "$INTERRUPT_ACK_RUN" ] && { printf 'confirmed'; return 0; } ;;
-      esac
-      awk -v e="$elapsed" -v t="$SETTLE_WAIT" 'BEGIN{exit !(e < t)}' || break
-      sleep "$POLL"
-      elapsed=$(awk -v e="$elapsed" -v p="$POLL" 'BEGIN{printf "%.3f", e + p}')
-      continue
-    fi
-    terminal=$(fm_busy_muse_run_terminal "$INTERRUPT_ACK_LOG" "$INTERRUPT_ACK_RUN" 2>/dev/null || true)
-    case "$terminal" in
-      cancelled) printf 'confirmed'; return 0 ;;
-      ?*) printf 'unconfirmed'; return 0 ;;
+    case "$INTERRUPT_ACK_SOURCE" in
+      copilot-events-abort)
+        # A cancellation is claimed only from a count that GREW; anything else,
+        # including a count that could not be read, keeps polling.
+        aborts=$(fm_busy_copilot_abort_count "$INTERRUPT_ACK_LOG" 2>/dev/null || true)
+        case "$aborts" in
+          ''|*[!0-9]*) ;;
+          *) [ "$aborts" -gt "$INTERRUPT_ACK_RUN" ] && { printf 'confirmed'; return 0; } ;;
+        esac
+        ;;
+      *)
+        # muse types its own terminal, so ANY terminal state is decisive here -
+        # a non-cancelled one ends the claim immediately rather than polling on.
+        terminal=$(fm_busy_muse_run_terminal "$INTERRUPT_ACK_LOG" "$INTERRUPT_ACK_RUN" 2>/dev/null || true)
+        case "$terminal" in
+          cancelled) printf 'confirmed'; return 0 ;;
+          ?*) printf 'unconfirmed'; return 0 ;;
+        esac
+        ;;
     esac
     awk -v e="$elapsed" -v t="$SETTLE_WAIT" 'BEGIN{exit !(e < t)}' || break
     sleep "$POLL"

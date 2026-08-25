@@ -46,8 +46,14 @@ ev_abort() { printf '{"type":"abort","data":{"reason":"user_initiated"},"id":"7c
 ev_abort_reason() { printf '{"type":"abort","data":{"reason":"%s"},"id":"7c1b"}\n' "$1"; }
 ev_tool_start() { printf '{"type":"tool.execution_start","data":{"toolName":"shell"},"id":"aa01"}\n'; }
 ev_session_start() { printf '{"type":"session.start","data":{"sessionId":"%s"},"id":"0001"}\n' "$1"; }
-# The decoy: an assistant message whose own text quotes the close strings.
-ev_quoting_message() { printf '{"type":"assistant.message","data":{"model":"gpt-5.4","content":"I will now emit assistant.turn_end and abort."},"id":"bb02"}\n'; }
+# The decoy. Its byte content is LOAD-BEARING: `"abort"` and
+# `"assistant.turn_end"` appear as quoted NESTED values, which is the only shape
+# that both survives the cheap prefilter and must still be rejected by the
+# structural parse. Prose cannot do it - valid JSON escapes every inner quote, so
+# `\"abort\"` puts a backslash where the prefilter needs a quote and the line is
+# dropped before the parser ever sees it, which makes the case prove nothing.
+# Do not "simplify" these values back into the content string.
+ev_quoting_message() { printf '{"type":"assistant.message","data":{"model":"gpt-5.4","toolName":"abort","label":"assistant.turn_end","content":"I will now emit assistant.turn_end and abort."},"id":"bb02"}\n'; }
 ev_message() { printf '{"type":"assistant.message","data":{"model":"%s","content":"done"},"id":"cc01","timestamp":"2026-08-25T18:41:14.900Z"}\n' "$1"; }
 # A subagent message: same record type, its own model, and the parentToolCallId
 # that is the only structural field separating it from the session's own.
@@ -160,12 +166,19 @@ bind_task "$CB/state" t-abort "$CB/home" s-abort
   || fail "an interrupted turn is closed by abort, not left busy forever"
 pass "busy: abort closes an interrupted turn"
 
-# The quoting decoy: the close strings appear only inside assistant prose.
+# The quoting decoy: the close strings sit in nested values, not in the record's
+# own top-level type. The fixture check is what keeps this case honest - a decoy
+# the prefilter discards would yield the same busy verdict as one the parser
+# rejected, and that ambiguity is what made this case vacuous before.
 log=$(write_events "$CB/home" s-quote < <( { ev_turn_start 0; ev_quoting_message; } ))
+LC_ALL=C grep -q '"abort"' "$log" && LC_ALL=C grep -q '"assistant\.turn_end"' "$log" \
+  || fail "the decoy no longer carries the close strings in quoted form, so the prefilter would discard it and this case would prove nothing"
 bind_task "$CB/state" t-quote "$CB/home" s-quote
 [ "$(fm_busy_classify tmux w copilot t-quote "$CB/state")" = "busy copilot-events" ] \
-  || fail "a message quoting the close string must not close the turn"
-pass "busy: a turn whose own text quotes the close string stays open"
+  || fail "a record carrying the close string outside its own type must not close the turn"
+[ "$(printf '%s' "$(ev_quoting_message)" | _fm_busy_jsonl_turn_events - type assistant.turn_start type assistant.turn_end abort)" = other ] \
+  || fail "the structural parse itself must reject the decoy, not merely the prefilter"
+pass "busy: a record carrying the close string outside its own type reaches the parser and stays open"
 
 # Both parser arms must agree, because which one runs depends only on whether
 # jq happens to be installed. Forcing the awk arm needs an EXCLUSIVE PATH
@@ -244,10 +257,14 @@ log=$(write_events "$CB/home" s-two < <( { ev_turn_start 0; ev_abort; ev_turn_st
 log=$(write_events "$CB/home" s-noabort < <( { ev_turn_start 0; ev_turn_end 0; } ))
 [ "$(fm_busy_copilot_abort_count "$log")" = 0 ] \
   || fail "a log with no abort must count zero"
-# A quoted abort must not inflate the count, for the same structural reason.
+# A nested `"abort"` must not inflate the count, for the same structural reason.
+# It reaches the counter's parse - the prefilter selects on exactly that token -
+# so a byte match would count it and the structural parse is what does not.
 log=$(write_events "$CB/home" s-quoteabort < <( { ev_turn_start 0; ev_quoting_message; } ))
+LC_ALL=C grep -q '"abort"' "$log" \
+  || fail "the decoy no longer carries a quoted abort, so the counter's prefilter would discard it and this case would prove nothing"
 [ "$(fm_busy_copilot_abort_count "$log")" = 0 ] \
-  || fail "a message quoting abort must not count as a cancellation"
+  || fail "an abort string outside the record's own type must not count as a cancellation"
 pass "busy: the interrupt acknowledgement counts real abort records only"
 
 # The shared fold must still serve cursor identically after being parameterized.

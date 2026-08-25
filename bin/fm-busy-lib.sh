@@ -1006,9 +1006,17 @@ fm_busy_copilot_events() {  # <state-dir> <id>
 # fm_busy_copilot_turn_state: fold the event log into busy | settled | none.
 # The grep is a cheap PREFILTER, not the decision: a copilot event log reaches
 # millions of bytes and only about one line in ten carries a turn lifecycle
-# record, so parsing every line on every poll is waste. Candidate lines still go
-# through the same structural parse, so an assistant message that merely quotes
-# `assistant.turn_end` is selected here and then rejected there as `other`.
+# record, so parsing every line on every poll is waste. The prefilter selects on
+# the QUOTED token, so what survives it is any line carrying `"abort"` or
+# `"assistant.turn_end"` anywhere in its raw bytes - a nested value, a key under
+# some other field - not just a record whose own top-level type is one of them.
+# Those survivors still go through the structural parse, which is what rejects
+# them as `other` because the value is not the record's own top-level type.
+# Both layers are needed: the prefilter for cost, the parse for the verdict.
+# Note the two layers do NOT compose into a byte match on prose: valid JSON
+# escapes every quote inside a string, so an assistant message that merely talks
+# about `assistant.turn_end` never carries the quoted token and is dropped by the
+# prefilter rather than reaching the parse at all.
 fm_busy_copilot_turn_state() {  # <events-log>
   [ -f "$1" ] || return 1
   LC_ALL=C grep -aE '"(assistant\.turn_start|assistant\.turn_end|abort)"' "$1" \
