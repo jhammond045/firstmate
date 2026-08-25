@@ -76,6 +76,12 @@ resolve_harness_binary() {  # <harness>
     printf '%s\n' "$HOME/.kimi-code/bin/kimi"
     return 0
   fi
+  # copilot's user-local install is routinely absent from a non-interactive
+  # PATH, so mirror bin/fm-spawn.sh's own fallback rather than skipping it.
+  if [ "$harness" = copilot ] && [ -n "${HOME:-}" ] && [ -x "$HOME/.local/bin/copilot" ]; then
+    printf '%s\n' "$HOME/.local/bin/copilot"
+    return 0
+  fi
   # cursor is never on PATH under the name `cursor`: it installs as
   # `cursor-agent` plus the legacy alias `agent`, and its user-local install is
   # routinely absent from a non-interactive PATH. Resolve it through the same
@@ -100,7 +106,11 @@ SKIPPED=
 # cursor matters for the same reason muse does, from the other direction: it
 # runs as a bundled node script, so its pane title is a bare `node` that no name
 # pattern can own, and identity has to come from its install path or argv[0].
-for harness in claude codex opencode pi pi-signed grok kimi cursor muse; do
+# copilot is the opposite case and is checked to keep it that way: it is a
+# single compiled executable whose pane title is its own name today, and a
+# future release that turned it into a wrapper or a bundled script would make it
+# unattributable exactly as Claude Code's version rename once did.
+for harness in claude codex opencode pi pi-signed grok kimi cursor copilot muse; do
   if ! bin_path=$(resolve_harness_binary "$harness"); then
     SKIPPED="$SKIPPED $harness"
     note "skip: $harness is not installed on this machine, so its classification is unverified here"
@@ -114,6 +124,10 @@ for harness in claude codex opencode pi pi-signed grok kimi cursor muse; do
   # cursor blocks on a workspace-trust prompt in a directory it has never seen,
   # which would hang this probe rather than classify anything; --trust is the
   # same flag fm-spawn passes for the same reason.
+  # copilot shows a folder-trust dialog in a directory it has never seen and no
+  # flag suppresses it (--yolo does not), but the process is running while that
+  # dialog is up, which is all the liveness probe reads - so this probe needs no
+  # equivalent flag and deliberately leaves the dialog unanswered.
   launch_args=""
   [ "$harness" = cursor ] && launch_args="--trust"
   # shellcheck disable=SC2086  # deliberate: an empty value must add no argument

@@ -95,7 +95,15 @@ check_harness_idle_empty() {  # <name> <launch-cmd...>
       # erases the actionable failure surface. Preserve those prompts; only
       # dismiss a non-trust startup modal.
       startup_screen=$(tmux -L "$SOCKET" capture-pane -p -t "$SESSION:$win" 2>/dev/null || true)
-      if ! printf '%s\n' "$startup_screen" | grep -qi 'trust'; then
+      if [ "$name" = copilot ]; then
+        # copilot is the one harness whose trust prompt must be ACCEPTED rather
+        # than preserved: no flag suppresses it (--yolo does not), so it stands
+        # between every fresh path and a composer, and bin/fm-spawn.sh clears it
+        # at launch with exactly this blind Enter. Escape would decline and exit.
+        # Verified on Copilot CLI 1.0.80 that a further Enter into the idle
+        # composer submits nothing, so this cannot start a turn or spend credits.
+        tmux -L "$SOCKET" send-keys -t "$SESSION:$win" Enter 2>/dev/null || true
+      elif ! printf '%s\n' "$startup_screen" | grep -qi 'trust'; then
         tmux -L "$SOCKET" send-keys -t "$SESSION:$win" Escape 2>/dev/null || true
       fi
       dismissed=1
@@ -117,7 +125,7 @@ check_harness_idle_empty() {  # <name> <launch-cmd...>
 }
 
 # --- 1. Every installed verified harness must reach a proven-empty composer --
-for h in claude codex opencode pi grok kimi muse; do
+for h in claude codex opencode pi grok kimi copilot muse; do
   if command -v "$h" >/dev/null 2>&1; then
     check_harness_idle_empty "$h" "$h"
   else

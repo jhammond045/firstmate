@@ -65,6 +65,13 @@ ln -s "$SLEEP_BIN" "$LAB/bin/musescore"
 ln -s "$SLEEP_BIN" "$LAB/bin/amuse"
 ln -s "$SLEEP_BIN" "$LAB/bin/muse-binary"
 ln -s "$SLEEP_BIN" "$LAB/bin/muse-bind"
+# copilot ships as a single compiled executable literally named `copilot`, so
+# unlike cursor there is no bundled-interpreter name to see through. The name is
+# therefore anchored rather than globbed, and these are the neighbours a
+# *copilot* glob would wrongly claim as a live agent pane.
+ln -s "$SLEEP_BIN" "$LAB/bin/copilot"
+ln -s "$SLEEP_BIN" "$LAB/bin/copilot-language-server"
+ln -s "$SLEEP_BIN" "$LAB/bin/gh-copilot"
 
 # A launcher whose own process identity is a bare shell, running the harness as
 # a child in the same foreground process group - the shape the real Pi Launcher
@@ -171,6 +178,27 @@ for decoy in musescore amuse muse-binary muse-bind; do
     || fail "'$decoy' merely contains 'muse' and must not classify as a live agent pane"
 done
 pass "tmux liveness: unrelated muse-containing command names stay ambiguous"
+
+new_window copilot "$LAB/bin/copilot" 900
+wait_for_state "$SESSION:copilot" alive \
+  || fail "copilot's own executable name must classify alive"
+# At least one name surface must attribute it, and which one is not asserted:
+# this case runs a symlink rather than the real binary, and which surface a
+# symlink blinds differs by platform - the same reason every other case here
+# asserts only the platform-independent property that the verdict is correct.
+if title_classifies_agent "$SESSION:copilot" || comms_classify_agent "$SESSION:copilot"; then
+  :
+else
+  fail "copilot must be attributable from at least one name surface"
+fi
+pass "tmux liveness: copilot's own executable name classifies alive"
+
+for decoy in copilot-language-server gh-copilot; do
+  new_window "decoy-$decoy" "$LAB/bin/$decoy" 900
+  wait_for_state "$SESSION:decoy-$decoy" ambiguous \
+    || fail "'$decoy' merely contains 'copilot' and must not classify as a live agent pane"
+done
+pass "tmux liveness: unrelated copilot-containing command names stay ambiguous"
 
 # --- a version name blinds one source ---------------------------------------
 # Giving a genuine harness-named executable the version-string argv[0] that
