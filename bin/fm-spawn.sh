@@ -104,7 +104,7 @@
 #   profile consultation. A --secondmate spawn is exempt and resolves the SECONDMATE
 #   harness (config/secondmate-harness -> config/crew-harness -> own), so the
 #   secondmate-vs-crewmate split is DURABLE across every respawn (recovery,
-#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|muse)
+#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|copilot|muse)
 #   overrides it for this spawn (either kind). A non-flag string containing
 #   whitespace is treated as a RAW launch command - the escape hatch for verifying
 #   new adapters. For pi and pi-signed, fm-spawn resolves the selected executable
@@ -1061,7 +1061,7 @@ if [ "$RELAUNCH" -eq 1 ]; then
   }
 elif [ "$KIND" = secondmate ]; then
   case "${POS[1]:-}" in
-    ''|claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|muse)
+    ''|claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|copilot|muse)
       ARG3=${POS[1]:-}
       ;;
     *' '*)
@@ -1164,6 +1164,32 @@ launch_template() {
     # only reads the environment. Cursor exposes no effort flag, so the shared
     # effort axis is deliberately omitted and stays in task metadata only.
     cursor) printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS -u CURSOR_INVOKED_AS __CURSORBIN__ --trust --yolo __MODELFLAG__--workspace __WORKTREE__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+    # copilot (GitHub Copilot CLI): -i starts the interactive TUI and submits
+    # the prompt, so the brief rides the launch command as it does for grok, pi,
+    # and muse. --yolo is the documented alias for
+    # --allow-all-tools --allow-all-paths --allow-all-urls.
+    # --session-id PINS the session uuid firstmate chose, which is what makes
+    # the busy source a direct lookup rather than muse's and cursor's search:
+    # copilot then writes its event log at
+    # <copilot-home>/session-state/<that uuid>/events.jsonl.
+    # --no-ask-user disables copilot's ask_user tool. A crewmate is told to work
+    # on its own, and a pane parked on an interactive question is invisible to
+    # firstmate's status protocol; worse, an open question would leave that
+    # turn's assistant.turn_start unclosed, so the busy source would report a
+    # waiting worker busy indefinitely instead of letting it go stale.
+    # Escalation rides the brief's status protocol instead.
+    # --no-custom-instructions is deliberately NOT passed: copilot loads AGENTS.md
+    # from the git root and cwd, and the crewmate contract depends on the task
+    # worktree's own project instructions being loaded. Verified: a copilot
+    # worker in a scratch project answered from that project's AGENTS.md.
+    # The foreign primary markers are cleared for the same reason cursor's are -
+    # copilot does NOT clear an inherited CLAUDECODE (verified on 1.0.80), so a
+    # process that only reads the environment could otherwise mistake a copilot
+    # worker for a claude one.
+    # copilot's folder-trust dialog is NOT suppressed by --yolo, so the gate
+    # below clears it after launch; no flag suppresses it, and firstmate will
+    # not write copilot's own managed trusted-folder store.
+    copilot) printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS -u CURSOR_AGENT -u CURSOR_INVOKED_AS __COPILOTBIN__ --yolo --no-ask-user --session-id __COPILOTSESSION__ __MODELFLAG____EFFORTFLAG__-i "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
     # Kimi Code rejects a positional prompt, so it launches bare and receives
     # only an absolute brief pointer after the TUI readiness gate below.
     # Its turn-end signal is a globally configured Stop hook plus a guarded
@@ -1242,6 +1268,19 @@ if [ "$KIND" = secondmate ] && [ "$HARNESS" = muse ]; then
   exit 1
 fi
 
+# copilot is verified as a CREWMATE/SCOUT adapter only, for the same reason and
+# with the same consequence. It does ship a global hook surface
+# (~/.copilot/hooks/*.json, version 1), but the shipped CLI documents no hook
+# event vocabulary at all - `copilot help` has no hooks topic - and the only
+# event observed in a working installation is sessionStart. A firstmate primary
+# needs a turn-end or stop callback to keep the no-turn-ends-blind guard and its
+# watcher supervision armed, and none is verified here, so a copilot secondmate
+# would be a firstmate whose supervision cycle could never be armed.
+if [ "$KIND" = secondmate ] && [ "$HARNESS" = copilot ]; then
+  echo "error: copilot is a verified crewmate/scout adapter only and cannot run a secondmate; no turn-end hook event is verified for it, so its primary supervision could never be armed. Select a harness verified for secondmates." >&2
+  exit 1
+fi
+
 case "$HARNESS" in
   pi|pi-signed)
     PI_BIN=$(resolve_pi_executable "$HARNESS") || {
@@ -1297,6 +1336,59 @@ fi
 
 secondmate_registry_value() {
   secondmate_registry_field "$DATA/secondmates.md" "$1" "$2"
+}
+
+# copilot ships as a single compiled executable named `copilot`, unlike cursor
+# (whose CLI is cursor-agent) and muse (whose launcher execs a versioned
+# binary), so the name really is the name. The absolute path is resolved for the
+# same reason every other adapter's is: the pane is created by a long-lived
+# backend daemon that does not inherit firstmate's PATH.
+resolve_copilot_binary() {
+  local candidate dir fallback
+  candidate=$(command -v copilot 2>/dev/null || true)
+  if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+    case "$candidate" in
+      /*) printf '%s\n' "$candidate"; return 0 ;;
+      *)
+        dir=$(cd "$(dirname "$candidate")" 2>/dev/null && pwd -P) || dir=
+        if [ -n "$dir" ]; then
+          printf '%s/%s\n' "$dir" "$(basename "$candidate")"
+          return 0
+        fi
+        ;;
+    esac
+  fi
+  fallback="${HOME:-}/.local/bin/copilot"
+  if [ -n "${HOME:-}" ] && [ -x "$fallback" ]; then
+    printf '%s\n' "$fallback"
+    return 0
+  fi
+  echo "error: copilot executable not found; searched PATH for 'copilot' and fallback '$fallback'" >&2
+  return 1
+}
+
+# A fresh lowercase session uuid for copilot's --session-id. uuidgen is present
+# on macOS and in util-linux; the kernel uuid source and a shell fallback cover
+# a host without it. The value only has to be a well-formed uuid nothing else
+# owns, because fm-spawn is choosing it rather than discovering it.
+new_copilot_session_id() {
+  local u=
+  if command -v uuidgen >/dev/null 2>&1; then
+    u=$(uuidgen 2>/dev/null || true)
+  fi
+  if [ -z "$u" ] && [ -r /proc/sys/kernel/random/uuid ]; then
+    u=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || true)
+  fi
+  if [ -z "$u" ]; then
+    u=$(LC_ALL=C hexdump -n 16 -e '4/4 "%08x" "\n"' /dev/urandom 2>/dev/null || true)
+    if [ ${#u} -eq 32 ]; then
+      u="${u:0:8}-${u:8:4}-4${u:13:3}-a${u:17:3}-${u:20:12}"
+    else
+      u=
+    fi
+  fi
+  [ -n "$u" ] || { echo "error: could not generate a copilot session id" >&2; return 1; }
+  printf '%s\n' "$u" | LC_ALL=C tr '[:upper:]' '[:lower:]'
 }
 
 resolve_kimi_binary() {
@@ -1376,7 +1468,7 @@ model_flag_for_harness() {
   local harness=$1 model=$2
   [ -n "$model" ] && [ "$model" != default ] || return 0
   case "$harness" in
-    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|muse)
+    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|copilot|muse)
       printf -- '--model %s ' "$(shell_quote "$model")"
       ;;
   esac
@@ -1436,6 +1528,16 @@ effort_flag_for_harness() {
     # task metadata but never reaches the launch command. Cursor encodes effort
     # in model ids such as cursor-grok-4.5-high, so it also receives no separate
     # effort flag.
+    copilot)
+      # `copilot --help` enumerates the accepted choices as
+      # none|minimal|low|medium|high|xhigh|max, so the whole shared vocabulary
+      # is reachable and max needs no alias. none/minimal sit below that
+      # vocabulary and stay deliberately unreachable rather than remapped onto
+      # low, the same posture muse takes.
+      case "$effort" in
+        low|medium|high|xhigh|max) printf -- '--effort %s ' "$(shell_quote "$effort")" ;;
+      esac
+      ;;
   esac
 }
 
@@ -1456,6 +1558,16 @@ case "$LAUNCH" in
     LAUNCH=${LAUNCH//__MUSEBIN__/$(shell_quote "$MUSE_BIN")}
     LAUNCH=${LAUNCH//__MUSECONFIG__/$(shell_quote "$MUSE_CONFIG_HOME")}
     LAUNCH=${LAUNCH//__MUSEDATA__/$(shell_quote "$MUSE_DATA_HOME")}
+    ;;
+esac
+
+case "$LAUNCH" in
+  *__COPILOTBIN__*)
+    COPILOT_BIN=$(resolve_copilot_binary) || exit 1
+    COPILOT_HOME_DIR=$(resolve_directory_input COPILOT_HOME "${COPILOT_HOME:-${HOME:-}/.copilot}") || exit 1
+    COPILOT_SESSION_ID=$(new_copilot_session_id) || exit 1
+    LAUNCH=${LAUNCH//__COPILOTBIN__/$(shell_quote "$COPILOT_BIN")}
+    LAUNCH=${LAUNCH//__COPILOTSESSION__/$(shell_quote "$COPILOT_SESSION_ID")}
     ;;
 esac
 
@@ -2204,6 +2316,56 @@ kimi_wait_for_delivery() {
   return 1
 }
 
+# copilot launch gate.
+#
+# The postcondition is STRUCTURAL rather than rendered: copilot's own event log
+# gains an assistant.turn_start only once the brief actually became a running
+# turn, so this proves delivery without matching a single vendor string. That
+# matters because copilot puts a folder-trust dialog in front of the launch that
+# --yolo does NOT suppress ("Do you trust the files in this folder?", option 1
+# "Yes" preselected), and every task gets a fresh worktree path, so without
+# clearing it every copilot spawn would block forever.
+#
+# The dialog is cleared with a BLIND Enter rather than by recognising its text.
+# Verified on Copilot CLI 1.0.80: one Enter accepts the preselected Yes, and
+# further Enters into the idle empty composer are no-ops - five of them left the
+# session at 0 AI credits with no event log and an empty composer - so the nudge
+# is safe to repeat and cannot be broken by a reworded dialog. Startup is not
+# instant even without the dialog (copilot blocks on MCP server startup while it
+# loads instructions, plugins, hooks and skills), which is why the budget is
+# generous and the nudge is spaced rather than tight.
+copilot_events_log() {
+  [ -n "${COPILOT_HOME_DIR:-}" ] && [ -n "${COPILOT_SESSION_ID:-}" ] || return 1
+  printf '%s/session-state/%s/events.jsonl' "$COPILOT_HOME_DIR" "$COPILOT_SESSION_ID"
+}
+
+# 0 once the launch brief is a running turn in this session's own event log.
+copilot_turn_started() {
+  local log
+  log=$(copilot_events_log) || return 1
+  [ -f "$log" ] || return 1
+  LC_ALL=C grep -aq '"assistant\.turn_start"' "$log"
+}
+
+copilot_wait_for_delivery() {
+  local i=0 max=${FM_COPILOT_DELIVERY_POLLS:-90} interval=${FM_COPILOT_POLL_INTERVAL:-1}
+  local nudge=${FM_COPILOT_NUDGE_EVERY:-5}
+  while [ "$i" -lt "$max" ]; do
+    copilot_turn_started && return 0
+    if [ "$nudge" -gt 0 ] && [ $((i % nudge)) = 0 ]; then
+      spawn_send_key "$T" Enter || true
+    fi
+    sleep "$interval"
+    i=$((i + 1))
+  done
+  copilot_turn_started
+}
+
+copilot_spawn_fail() {  # <detail>
+  printf 'failed: %s\n' "$1" >> "$STATE/$ID.status"
+  echo "error: $1; inspect window $T" >&2
+}
+
 kimi_spawn_fail() {  # <detail>
   printf 'failed: %s\n' "$1" >> "$STATE/$ID.status"
   echo "error: $1; inspect window $T" >&2
@@ -2571,6 +2733,20 @@ EOF
         fi
       } > "$STATE/$ID.cursor-session"
       ;;
+    copilot*)
+      # copilot's busy source is its own session event log, a pull source with
+      # no writer, so nothing is armed and no record is seeded - the same shape
+      # as muse and cursor. This sidecar is the whole binding, and unlike theirs
+      # it needs no search at all: fm-spawn CHOSE the session id above with
+      # --session-id, so the log path is a direct lookup and a relaunch into a
+      # reused worktree can never fold its predecessor's log.
+      if [ -n "${COPILOT_HOME_DIR:-}" ] && [ -n "${COPILOT_SESSION_ID:-}" ]; then
+        {
+          printf 'copilot_home=%s\n' "$COPILOT_HOME_DIR"
+          printf 'session_id=%s\n' "$COPILOT_SESSION_ID"
+        } > "$STATE/$ID.copilot-session"
+      fi
+      ;;
     kimi*)
       # Kimi's Stop hook is global, but it is inert unless cwd contains this
       # task's token pointer and the token resolves through Firstmate's private
@@ -2828,6 +3004,26 @@ if [ "${HERDR_PROJECTED:-0}" -eq 1 ]; then
   spawn_herdr_presentation_order_lock_release
 fi
 spawn_send_key "$T" Enter
+if [ "$HARNESS" = copilot ]; then
+  if ! copilot_wait_for_delivery; then
+    copilot_spawn_fail "copilot did not start a turn on the launch brief"
+    exit 1
+  fi
+  # copilot SILENTLY downgrades a model the account cannot reach - it prints
+  # `Model "<m>" from --model flag is not available. Using "<other>" instead.`
+  # and carries on - so a spawn that looked successful can be running, and
+  # billing, a different and often far more expensive model than the one
+  # dispatch chose. The effective model is read back from the same event log the
+  # gate just used, and a mismatch is reported loudly rather than failing the
+  # spawn, because the worker is already doing real work by this point.
+  if [ -n "$MODEL" ] && [ "$MODEL" != default ]; then
+    COPILOT_EFFECTIVE_MODEL=$(LC_ALL=C sed -n 's/.*"model"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+      "$(copilot_events_log)" 2>/dev/null | tail -1 || true)
+    if [ -n "$COPILOT_EFFECTIVE_MODEL" ] && [ "$COPILOT_EFFECTIVE_MODEL" != "$MODEL" ]; then
+      echo "warning: copilot task $ID requested model '$MODEL' but is running '$COPILOT_EFFECTIVE_MODEL'; copilot substitutes a model the account cannot reach instead of refusing. Check the id against this account's /model list." >&2
+    fi
+  fi
+fi
 if [ "$HARNESS" = kimi ]; then
   if ! kimi_wait_for_ready; then
     kimi_spawn_fail "kimi did not show a verified ready signal before brief delivery"

@@ -40,7 +40,8 @@
 #   fm-recovery      a documented recovery reset after relaunch
 # Classifier-only sources (never written into a record):
 #   endpoint-gone, herdr-native, grok-regex, muse-session-log,
-#   cursor-transcript, missing, malformed, gen-mismatch, source-mismatch,
+#   cursor-transcript, copilot-events, missing, malformed, gen-mismatch,
+#   source-mismatch,
 #   kimi-unverified, codex-unverified, capture-failed, no-target
 #
 # Classification (fm_busy_classify): busy | idle | unknown | dead, always
@@ -683,23 +684,36 @@ fm_busy_cursor_transcript() {  # <state-dir> <id>
   printf '%s' "$found"
 }
 
-# fm_busy_cursor_turn_state: fold the transcript into busy | settled | none.
-# Lifecycle records are matched on top-level fields of structurally valid JSON,
-# so a turn whose own text mentions turn_ended cannot close it.
-fm_busy_cursor_turn_state() {  # <transcript>
-  [ -f "$1" ] || return 1
+# _fm_busy_jsonl_turn_fold: the ONE fold from an append-only JSONL turn log to
+# busy | settled | none, shared by every adapter whose harness writes one.
+# Callers name the records that open and close a turn; a turn left open past
+# its last close is busy and a trailing close is a settled turn.
+#
+# Lifecycle records are matched on TOP-LEVEL fields of structurally valid JSON,
+# which is the property that makes the source trustworthy: a turn whose own
+# assistant text quotes the close string cannot close it. The jq arm is used
+# when jq is installed and the awk arm is a full JSON-line parser for when it
+# is not; both must agree, which is what tests/fm-busy-state.test.sh pins.
+_fm_busy_jsonl_turn_fold() {  # <open-key> <open-value> <close-key> <close-values...>  [stdin: JSONL]
+  local okey=$1 oval=$2 ckey=$3
+  shift 3
+  local cvals="$*"
   if command -v jq >/dev/null 2>&1; then
-    LC_ALL=C jq -Rr '
-      try (
+    LC_ALL=C jq -Rr --arg okey "$okey" --arg oval "$oval" --arg ckey "$ckey" \
+      --arg cvals "$cvals" '
+      ($cvals | split(" ")) as $close
+      | try (
         fromjson
-        | if type == "object" and .type? == "turn_ended" then "close"
-          elif type == "object" and .role? == "user" then "open"
+        | if type == "object" and (.[$ckey]? | type) == "string"
+             and (.[$ckey] | IN($close[])) then "close"
+          elif type == "object" and .[$okey]? == $oval then "open"
           else "other"
           end
       ) catch "malformed"
-    ' "$1"
+    '
   else
-    LC_ALL=C awk '
+    LC_ALL=C awk -v okey="$okey" -v oval="$oval" -v ckey="$ckey" -v cvals="$cvals" '
+      BEGIN { split(cvals, cv, " "); for (i in cv) closeset[cv[i]] = 1 }
       function ws(    c) {
         while (p <= n) {
           c = substr(line, p, 1)
@@ -781,8 +795,8 @@ fm_busy_cursor_turn_state() {  # <transcript>
           p++; ws()
           if (!json(depth + 1)) return 0
           vkind = kind; vvalue = value
-          if (depth == 0 && key == "type") is_close = (vkind == "string" && vvalue == "turn_ended")
-          if (depth == 0 && key == "role") is_open = (vkind == "string" && vvalue == "user")
+          if (depth == 0 && key == ckey && vkind == "string" && (vvalue in closeset)) is_close = 1
+          if (depth == 0 && key == okey && vkind == "string" && vvalue == oval) is_open = 1
           ws(); c = substr(line, p, 1)
           if (c == "}") {
             p++; kind = "object"; value = ""
@@ -810,7 +824,7 @@ fm_busy_cursor_turn_state() {  # <transcript>
         valid = json(0); ws()
         print (valid && p > n ? event : "malformed")
       }
-    ' "$1"
+    '
   fi | LC_ALL=C awk '
     $0 == "close" { open = 0; seen = 1; malformed = 0; next }
     $0 == "open" { open = 1; seen = 1; next }
@@ -820,6 +834,81 @@ fm_busy_cursor_turn_state() {  # <transcript>
       print (open ? "busy" : "settled")
     }
   '
+}
+
+# fm_busy_cursor_turn_state: cursor's turn is opened by a role:user record and
+# closed by a typed turn_ended, which covers its aborted close too.
+fm_busy_cursor_turn_state() {  # <transcript>
+  [ -f "$1" ] || return 1
+  _fm_busy_jsonl_turn_fold role user type turn_ended < "$1"
+}
+
+# copilot session-event-log busy source
+#
+# GitHub Copilot CLI persists an append-only event log per session at
+# <copilot-home>/session-state/<session-id>/events.jsonl and brackets every
+# inference step. Verified live on Copilot CLI 1.0.80:
+#   {"type":"assistant.turn_start","data":{"turnId":"0", ...}}   <- step opens
+#   {"type":"tool.execution_start", ...}                         <- work
+#   {"type":"assistant.turn_end","data":{"turnId":"0"}}          <- step closes
+#   {"type":"abort","data":{"reason":"user_initiated"}}          <- Ctrl+C closes
+# Nothing is installed, armed, or seeded and no trust grant is needed: copilot
+# writes this log on its own, which is why copilot has no entry in
+# fm_busy_sources_for_harness - a seeded record with no writer could never be
+# cleared. This is the same no-writer shape as muse and cursor.
+#
+# Two properties are what make the fold trustworthy, and a change here must
+# preserve both. Tool execution happens INSIDE the pair, so a worker sitting in
+# a long foreground shell call reads busy - exactly where a rendered spinner or
+# opencode's native idle verdict fails. And `abort` must be a close: a Ctrl+C
+# leaves the interrupted `assistant.turn_start` with no matching turn_end, so a
+# fold that knew only the turn pair would report that pane busy forever.
+#
+# The bracket is per INFERENCE STEP, not per user interaction: one interaction
+# emits turnId 0, 1, 2 ... back to back, leaving a sub-millisecond window
+# between one step's close and the next step's open in which the log reads
+# settled. muse's run-level bracket has the same shape and the same precedent.
+# No interaction-level close exists to use instead: session.usage_checkpoint is
+# absent from a 17,060-line real session log entirely, and session.task_complete
+# does not appear once per interaction.
+#
+# Resolution needs no search, unlike muse's and cursor's, because fm-spawn
+# CHOOSES the session id with copilot's --session-id and records it here.
+fm_busy_copilot_binding_path() {  # <state-dir> <id>
+  printf '%s/%s.copilot-session' "$1" "$2"
+}
+
+fm_busy_copilot_binding_field() {  # <state-dir> <id> <key>
+  local path value
+  path=$(fm_busy_copilot_binding_path "$1" "$2")
+  [ -f "$path" ] || return 1
+  value=$(LC_ALL=C awk -F= -v k="$3" '$1 == k { sub(/^[^=]*=/, ""); print; exit }' "$path")
+  [ -n "$value" ] || return 1
+  printf '%s' "$value"
+}
+
+# fm_busy_copilot_events: the ONE event log this pane owns, or failure. The log
+# is created lazily on the session's first turn, so its absence means no turn
+# has been submitted yet - which is unknown, never idle.
+fm_busy_copilot_events() {  # <state-dir> <id>
+  local home session log
+  home=$(fm_busy_copilot_binding_field "$1" "$2" copilot_home) || return 1
+  session=$(fm_busy_copilot_binding_field "$1" "$2" session_id) || return 1
+  log="$home/session-state/$session/events.jsonl"
+  [ -f "$log" ] || return 1
+  printf '%s' "$log"
+}
+
+# fm_busy_copilot_turn_state: fold the event log into busy | settled | none.
+# The grep is a cheap PREFILTER, not the decision: a copilot event log reaches
+# millions of bytes and only about one line in ten carries a turn lifecycle
+# record, so parsing every line on every poll is waste. Candidate lines still go
+# through the same structural parse, so an assistant message that merely quotes
+# `assistant.turn_end` is selected here and then rejected there as `other`.
+fm_busy_copilot_turn_state() {  # <events-log>
+  [ -f "$1" ] || return 1
+  LC_ALL=C grep -aE '"(assistant\.turn_start|assistant\.turn_end|abort)"' "$1" \
+    | _fm_busy_jsonl_turn_fold type assistant.turn_start type assistant.turn_end abort
 }
 
 # fm_busy_grok_tail_busy: the Grok-only temporary rendered-tail fallback.
@@ -868,6 +957,23 @@ fm_busy_classify() {  # <backend> <target> <harness> <id> <state-dir> [tail40]
         busy) printf 'busy cursor-transcript' ;;
         settled) printf 'idle cursor-transcript' ;;
         *) printf 'unknown cursor-transcript' ;;
+      esac
+      return 0
+      ;;
+    copilot*)
+      # Semantic, on demand: fold this task's bound session event log. Every
+      # outcome that is not a proven open or a proven close - no sidecar, a log
+      # copilot has not created yet, an unreadable or record-free file - is
+      # unknown, never idle. copilot's rendered `esc interrupt` footer is
+      # deliberately NOT consulted here; see the source note above.
+      if ! log=$(fm_busy_copilot_events "$state" "$id"); then
+        printf 'unknown copilot-events'
+        return 0
+      fi
+      case "$(fm_busy_copilot_turn_state "$log" 2>/dev/null)" in
+        busy) printf 'busy copilot-events' ;;
+        settled) printf 'idle copilot-events' ;;
+        *) printf 'unknown copilot-events' ;;
       esac
       return 0
       ;;
