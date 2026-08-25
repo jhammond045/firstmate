@@ -1043,10 +1043,13 @@ fm_busy_copilot_turn_state() {  # <events-log>
 #
 # SUBAGENT messages carry their own data.model and are excluded on
 # data.parentToolCallId, which is present on a subagent message and absent on
-# the session's own. Folding this machine's 137 real 1.0.80 session logs: every
-# gpt-4.1 (180), claude-sonnet-4.5 (68), and claude-sonnet-4.6 (40) record was a
-# subagent one, while the session's own messages only ever carried the model the
-# session was launched with. Without the exclusion a subagent could be reported
+# the session's own. Folding this machine's 137 real session logs - a corpus
+# spanning CLI 1.0.20 through 1.0.80, of which only 9 are the pinned 1.0.80 -
+# every gpt-4.1 (180), claude-sonnet-4.5 (68), and claude-sonnet-4.6 (40) record
+# was a subagent one, while the session's own messages only ever carried the
+# model the session was launched with. The split has therefore held across many
+# versions rather than being pinned to one, which is the stronger claim, but it
+# is not a 1.0.80-only observation. Without the exclusion a subagent could be reported
 # as the session's model.
 #
 # The first qualifying record wins, because the question is which model this

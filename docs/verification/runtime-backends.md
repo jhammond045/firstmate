@@ -1062,7 +1062,8 @@ The session printed:
 
 and ran gpt-5.4, which is why `fm-spawn.sh` compares the effective model in the event log against the requested one and warns on a mismatch.
 The comparison is a plain string equality because `assistant.message`'s `data.model` carries the flag id verbatim, not the `/model` picker's display name.
-Folding every `events.jsonl` under this machine's copilot home splits by `data.parentToolCallId`, which is present on a SUBAGENT message and absent on the session's own:
+Folding every `events.jsonl` under this machine's copilot home splits by `data.parentToolCallId`, which is present on a SUBAGENT message and absent on the session's own.
+That corpus is 137 logs spanning CLI 1.0.20 through 1.0.80 rather than 1.0.80 alone, so the split is observed across versions rather than pinned to the one this adapter was verified against:
 
 | | session's own | subagent |
 | --- | --- | --- |
