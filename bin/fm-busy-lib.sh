@@ -693,7 +693,9 @@ fm_busy_cursor_transcript() {  # <state-dir> <id>
 # which is the property that makes the source trustworthy: a turn whose own
 # assistant text quotes the close string cannot close it. The jq arm is used
 # when jq is installed and the awk arm is a full JSON-line parser for when it
-# is not; both must agree, which is what tests/fm-busy-state.test.sh pins.
+# is not; both must agree, which is what the no-jq fallback case in
+# tests/fm-cursor-harness.test.sh and the jq/awk agreement case in
+# tests/fm-copilot-harness.test.sh pin.
 _fm_busy_jsonl_turn_events() {  # <open-key> <open-value> <close-key> <close-values...>  [stdin: JSONL]
   local okey=$1 oval=$2 ckey=$3
   shift 3

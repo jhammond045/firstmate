@@ -177,7 +177,16 @@ NO_JQ_BIN=$TMP_ROOT/no-jq-bin
 mkdir -p "$NO_JQ_BIN"
 ln -sf "$awk_bin" "$NO_JQ_BIN/awk"
 ln -sf "$grep_bin" "$NO_JQ_BIN/grep"
-if ( PATH="$NO_JQ_BIN"; command -v jq >/dev/null 2>&1 ); then
+
+# Every no-jq case runs through this ONE helper, guard included. A temp-prefix
+# assignment before a shell function (PATH=x f) does not flush bash's command
+# hash table, so a hashed jq stays reachable inside f while a separate
+# `( PATH=x; command -v jq )` probe reports it hidden - a guard using the second
+# form would pass while the assertions it guards silently re-ran the jq arm.
+# Sharing one form is what keeps the guard's verdict true of the assertions.
+no_jq() { ( PATH=$NO_JQ_BIN; "$@" ); }
+
+if no_jq command -v jq >/dev/null 2>&1; then
   fail "the awk-arm PATH still resolves jq, so every assertion below would re-run the jq arm"
 fi
 pass "busy: the no-jq PATH genuinely hides jq, so the awk-arm cases below are not vacuous"
@@ -185,10 +194,26 @@ pass "busy: the no-jq PATH genuinely hides jq, so the awk-arm cases below are no
 for sid in s-open s-done s-abort s-quote; do
   L=$CB/home/session-state/$sid/events.jsonl
   a=$(fm_busy_copilot_turn_state "$L")
-  b=$(PATH="$NO_JQ_BIN" fm_busy_copilot_turn_state "$L")
+  b=$(no_jq fm_busy_copilot_turn_state "$L")
   [ "$a" = "$b" ] || fail "the jq and awk folds disagree on $sid ($a vs $b)"
 done
 pass "busy: the jq and awk folds agree on every fixture"
+
+# Unreachable jq is only half the claim; the awk arm must be what actually
+# produced those verdicts. Breaking awk under the same PATH is what proves it:
+# if the fold still returned a verdict, something other than awk parsed the log.
+BROKEN_AWK_BIN=$TMP_ROOT/broken-awk-bin
+mkdir -p "$BROKEN_AWK_BIN"
+ln -sf "$grep_bin" "$BROKEN_AWK_BIN/grep"
+printf '#!/bin/sh\nexit 1\n' > "$BROKEN_AWK_BIN/awk"
+chmod +x "$BROKEN_AWK_BIN/awk"
+L=$CB/home/session-state/s-open/events.jsonl
+[ "$(fm_busy_copilot_turn_state "$L")" = busy ] \
+  || fail "the open-turn fixture must read busy before this case can mean anything"
+out=$( PATH=$BROKEN_AWK_BIN; fm_busy_copilot_turn_state "$L" )
+[ -z "$out" ] \
+  || fail "a broken awk still yielded '$out', so the no-jq verdicts did not come from the awk arm"
+pass "busy: breaking awk breaks the no-jq verdict, so the awk arm is what produced it"
 
 # A session whose log copilot has not created yet is unknown, never idle: the
 # log appears only on the session's first turn.
@@ -211,7 +236,7 @@ pass "busy: an absent, unbound, or record-free log is unknown rather than idle"
 log=$(write_events "$CB/home" s-two < <( { ev_turn_start 0; ev_abort; ev_turn_start 0; ev_abort; } ))
 [ "$(fm_busy_copilot_abort_count "$log")" = 2 ] \
   || fail "the abort count must see both records (got '$(fm_busy_copilot_abort_count "$log")')"
-[ "$(PATH="$NO_JQ_BIN" fm_busy_copilot_abort_count "$log")" = 2 ] \
+[ "$(no_jq fm_busy_copilot_abort_count "$log")" = 2 ] \
   || fail "the awk arm must count aborts identically"
 log=$(write_events "$CB/home" s-noabort < <( { ev_turn_start 0; ev_turn_end 0; } ))
 [ "$(fm_busy_copilot_abort_count "$log")" = 0 ] \
