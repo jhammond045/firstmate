@@ -696,26 +696,51 @@ fm_busy_cursor_transcript() {  # <state-dir> <id>
 # is not; both must agree, which is what the no-jq fallback case in
 # tests/fm-cursor-harness.test.sh and the jq/awk agreement case in
 # tests/fm-copilot-harness.test.sh pin.
-_fm_busy_jsonl_turn_events() {  # <open-key> <open-value> <close-key> <close-values...>  [stdin: JSONL]
-  local okey=$1 oval=$2 ckey=$3
-  shift 3
+#
+# The optional <qualifier> narrows what counts as a close to records whose own
+# nested field also matches, spelled `<parent>.<child>=<v1>[,<v2>...]`, or `-`
+# for no narrowing. It exists because a top-level type alone cannot always say
+# what a record MEANS: copilot's abort record types the same for every cause and
+# only its nested data.reason says a human asked for it. The value set is
+# comma-delimited rather than space-delimited like the close set, because a real
+# reason value contains a space. A record that closes but fails the qualifier is
+# reported as `other`, so it is simply not a close for that caller.
+_fm_busy_jsonl_turn_events() {  # <qualifier> <open-key> <open-value> <close-key> <close-values...>  [stdin: JSONL]
+  local qual=$1 okey=$2 oval=$3 ckey=$4
+  shift 4
   local cvals="$*"
+  local qparent='' qchild='' qvals='' qpath=''
+  if [ "$qual" != - ]; then
+    qpath=${qual%%=*}
+    qvals=${qual#*=}
+    qparent=${qpath%%.*}
+    qchild=${qpath#*.}
+  fi
   if command -v jq >/dev/null 2>&1; then
     LC_ALL=C jq -Rr --arg okey "$okey" --arg oval "$oval" --arg ckey "$ckey" \
-      --arg cvals "$cvals" '
+      --arg cvals "$cvals" --arg qparent "$qparent" --arg qchild "$qchild" \
+      --arg qvals "$qvals" '
       ($cvals | split(" ")) as $close
+      | ($qvals | split(",")) as $qset
       | try (
         fromjson
         | if type == "object" and (.[$ckey]? | type) == "string"
-             and (.[$ckey] | IN($close[])) then "close"
+             and (.[$ckey] | IN($close[]))
+             and ($qparent == ""
+                  or ((.[$qparent]? | if type == "object" then .[$qchild]? else null end)
+                      | IN($qset[]))) then "close"
           elif type == "object" and .[$okey]? == $oval then "open"
           else "other"
           end
       ) catch "malformed"
     '
   else
-    LC_ALL=C awk -v okey="$okey" -v oval="$oval" -v ckey="$ckey" -v cvals="$cvals" '
-      BEGIN { split(cvals, cv, " "); for (i in cv) closeset[cv[i]] = 1 }
+    LC_ALL=C awk -v okey="$okey" -v oval="$oval" -v ckey="$ckey" -v cvals="$cvals" \
+      -v qparent="$qparent" -v qchild="$qchild" -v qvals="$qvals" '
+      BEGIN {
+        split(cvals, cv, " "); for (i in cv) closeset[cv[i]] = 1
+        if (qparent != "") { split(qvals, qv, ","); for (i in qv) qualset[qv[i]] = 1 }
+      }
       function ws(    c) {
         while (p <= n) {
           c = substr(line, p, 1)
@@ -795,14 +820,17 @@ _fm_busy_jsonl_turn_events() {  # <open-key> <open-value> <close-key> <close-val
           key = value; ws()
           if (substr(line, p, 1) != ":") return 0
           p++; ws()
+          pkey[depth] = key
           if (!json(depth + 1)) return 0
           vkind = kind; vvalue = value
           if (depth == 0 && key == ckey && vkind == "string" && (vvalue in closeset)) is_close = 1
           if (depth == 0 && key == okey && vkind == "string" && vvalue == oval) is_open = 1
+          if (depth == 1 && qparent != "" && pkey[0] == qparent && key == qchild \
+              && vkind == "string" && (vvalue in qualset)) qual = 1
           ws(); c = substr(line, p, 1)
           if (c == "}") {
             p++; kind = "object"; value = ""
-            if (depth == 0) event = (is_close ? "close" : (is_open ? "open" : "other"))
+            if (depth == 0) event = ((is_close && (qparent == "" || qual)) ? "close" : (is_open ? "open" : "other"))
             return 1
           }
           if (c != ",") return 0
@@ -822,7 +850,7 @@ _fm_busy_jsonl_turn_events() {  # <open-key> <open-value> <close-key> <close-val
         return 0
       }
       {
-        line = $0; p = 1; n = length(line); event = "other"; kind = ""; value = ""
+        line = $0; p = 1; n = length(line); event = "other"; kind = ""; value = ""; qual = 0
         valid = json(0); ws()
         print (valid && p > n ? event : "malformed")
       }
@@ -834,7 +862,7 @@ _fm_busy_jsonl_turn_events() {  # <open-key> <open-value> <close-key> <close-val
 # Kept separate from the classifier above so a caller that needs the individual
 # records - counting how many closes a log holds, say - reaches the same
 # structural parse instead of falling back to a byte match on the same file.
-_fm_busy_jsonl_turn_fold() {  # <open-key> <open-value> <close-key> <close-values...>  [stdin: JSONL]
+_fm_busy_jsonl_turn_fold() {  # <qualifier> <open-key> <open-value> <close-key> <close-values...>  [stdin: JSONL]
   _fm_busy_jsonl_turn_events "$@" | LC_ALL=C awk '
     $0 == "close" { open = 0; seen = 1; malformed = 0; next }
     $0 == "open" { open = 1; seen = 1; next }
@@ -846,16 +874,31 @@ _fm_busy_jsonl_turn_fold() {  # <open-key> <open-value> <close-key> <close-value
   '
 }
 
-# fm_busy_copilot_abort_count: how many user-initiated abort records the log
+# fm_busy_copilot_abort_count: how many USER-INITIATED abort records the log
 # holds. A cancellation is claimed from a NEW abort appearing after the
 # interrupt key, never from the presence of one: the log accumulates every
 # earlier interrupt's aborts, so presence alone would confirm a cancellation
 # that already happened turns ago. The count is the pre-interrupt baseline,
 # exactly as muse captures the active run id before its key.
+#
+# This is the ONE consumer of the abort record that must care WHY the turn ended,
+# because bin/fm-control.sh turns a growth in this count into `cancel=confirmed`.
+# An abort with any other cause would otherwise be reported as a landed
+# interrupt, and supervision would trust a cancellation that never happened. The
+# busy fold below deliberately does NOT narrow this way; see its own comment.
+#
+# Both observed spellings of the reason are accepted. Folding this machine's 137
+# real session logs found abort reasons `user_initiated` (38) and `user
+# initiated` (5) and no other reason at all, the spaced form only in sessions
+# predating the pinned 1.0.80. Both unambiguously mean a human cancelled, so
+# counting both cannot over-claim, while rejecting the legacy spelling would
+# report `unconfirmed` for a real cancellation on an older CLI. The narrowing is
+# therefore a guard against a FUTURE non-user reason rather than a response to
+# one that was observed.
 fm_busy_copilot_abort_count() {  # <events-log>
   [ -f "$1" ] || return 1
   LC_ALL=C grep -aE '"abort"' "$1" \
-    | _fm_busy_jsonl_turn_events type __never__ type abort \
+    | _fm_busy_jsonl_turn_events 'data.reason=user_initiated,user initiated' type __never__ type abort \
     | LC_ALL=C grep -c '^close$' || true
 }
 
@@ -863,7 +906,7 @@ fm_busy_copilot_abort_count() {  # <events-log>
 # closed by a typed turn_ended, which covers its aborted close too.
 fm_busy_cursor_turn_state() {  # <transcript>
   [ -f "$1" ] || return 1
-  _fm_busy_jsonl_turn_fold role user type turn_ended < "$1"
+  _fm_busy_jsonl_turn_fold - role user type turn_ended < "$1"
 }
 
 # copilot session-event-log busy source
@@ -885,7 +928,13 @@ fm_busy_cursor_turn_state() {  # <transcript>
 # a long foreground shell call reads busy - exactly where a rendered spinner or
 # opencode's native idle verdict fails. And `abort` must be a close: a Ctrl+C
 # leaves the interrupted `assistant.turn_start` with no matching turn_end, so a
-# fold that knew only the turn pair would report that pane busy forever.
+# fold that knew only the turn pair would report that pane busy forever. The
+# close is deliberately reason-AGNOSTIC: ANY top-level abort record ends the
+# turn here, whatever its data.reason says, because a turn ended by any cause is
+# just as finished as a cancelled one. Narrowing this the way the interrupt
+# counter does would put the original trap straight back - an abort with some
+# other reason would leave its turn_start unmatched and that pane would read
+# busy forever.
 #
 # The bracket is per INFERENCE STEP, not per user interaction: one interaction
 # emits turnId 0, 1, 2 ... back to back, leaving a sub-millisecond window
@@ -931,7 +980,7 @@ fm_busy_copilot_events() {  # <state-dir> <id>
 fm_busy_copilot_turn_state() {  # <events-log>
   [ -f "$1" ] || return 1
   LC_ALL=C grep -aE '"(assistant\.turn_start|assistant\.turn_end|abort)"' "$1" \
-    | _fm_busy_jsonl_turn_fold type assistant.turn_start type assistant.turn_end abort
+    | _fm_busy_jsonl_turn_fold - type assistant.turn_start type assistant.turn_end abort
 }
 
 # fm_busy_copilot_effective_model: which model this session is actually running,

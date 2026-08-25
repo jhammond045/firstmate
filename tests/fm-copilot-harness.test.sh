@@ -41,6 +41,9 @@ TMP_ROOT=$(fm_test_tmproot fm-copilot-harness)
 ev_turn_start() { printf '{"type":"assistant.turn_start","data":{"turnId":"%s","interactionId":"4a246aad"},"id":"9bcd612e","timestamp":"2026-08-25T18:41:10.360Z"}\n' "$1"; }
 ev_turn_end() { printf '{"type":"assistant.turn_end","data":{"turnId":"%s"},"id":"17d0d109","timestamp":"2026-08-25T18:41:15.057Z"}\n' "$1"; }
 ev_abort() { printf '{"type":"abort","data":{"reason":"user_initiated"},"id":"7c1a"}\n'; }
+# Copilot's abort record types the same whatever ended the turn; only this
+# nested reason says a human asked for it.
+ev_abort_reason() { printf '{"type":"abort","data":{"reason":"%s"},"id":"7c1b"}\n' "$1"; }
 ev_tool_start() { printf '{"type":"tool.execution_start","data":{"toolName":"shell"},"id":"aa01"}\n'; }
 ev_session_start() { printf '{"type":"session.start","data":{"sessionId":"%s"},"id":"0001"}\n' "$1"; }
 # The decoy: an assistant message whose own text quotes the close strings.
@@ -253,6 +256,47 @@ CUR=$TMP_ROOT/cursor.jsonl
 [ "$(fm_busy_cursor_turn_state "$CUR")" = settled ] \
   || fail "the shared fold must still close a cursor turn on turn_ended"
 pass "busy: the shared JSONL fold still serves cursor's own records"
+
+# The two consumers of an abort record deliberately DISAGREE, and that split is
+# load-bearing. Any abort ends the turn, so the busy fold must close on it
+# whatever the cause - narrowing there would leave a non-user abort's
+# assistant.turn_start unmatched and that pane would read busy forever. But
+# bin/fm-control.sh turns a growth in the abort COUNT into `cancel=confirmed`, so
+# only a human cancellation may be counted; anything else would report an
+# interrupt that never landed.
+log=$(write_events "$CB/home" s-abort-other < <( { ev_turn_start 0; ev_abort_reason context_limit; } ))
+bind_task "$CB/state" t-abort-other "$CB/home" s-abort-other
+[ "$(fm_busy_classify tmux w copilot t-abort-other "$CB/state")" = "idle copilot-events" ] \
+  || fail "an abort with a non-user reason must still close the turn, never leave it busy"
+[ "$(fm_busy_copilot_abort_count "$log")" = 0 ] \
+  || fail "an abort with a non-user reason must not be counted as a cancellation"
+[ "$(no_jq fm_busy_copilot_abort_count "$log")" = 0 ] \
+  || fail "the awk arm must also refuse to count a non-user abort"
+[ "$(no_jq fm_busy_copilot_turn_state "$log")" = settled ] \
+  || fail "the awk arm must also close the turn on a non-user abort"
+
+log=$(write_events "$CB/home" s-abort-user < <( { ev_turn_start 0; ev_abort_reason user_initiated; } ))
+[ "$(fm_busy_copilot_abort_count "$log")" = 1 ] \
+  || fail "a user-initiated abort must both close the turn and be counted"
+[ "$(no_jq fm_busy_copilot_abort_count "$log")" = 1 ] \
+  || fail "the awk arm must count a user-initiated abort identically"
+
+# The legacy spelling carries a SPACE, so a value set split on spaces would tear
+# it in half and silently report a real cancellation as unconfirmed.
+log=$(write_events "$CB/home" s-abort-legacy < <( { ev_turn_start 0; ev_abort_reason 'user initiated'; } ))
+[ "$(fm_busy_copilot_abort_count "$log")" = 1 ] \
+  || fail "the spaced legacy reason spelling must still count as a cancellation"
+[ "$(no_jq fm_busy_copilot_abort_count "$log")" = 1 ] \
+  || fail "the awk arm must accept the spaced legacy reason spelling too"
+
+# A reason nested under some OTHER key must not qualify, or the match is not
+# really reading the abort record's own data.reason.
+log=$(write_events "$CB/home" s-abort-foreign < <( { ev_turn_start 0; printf '{"type":"abort","data":{"cause":"x"},"meta":{"reason":"user_initiated"},"id":"7c1c"}\n'; } ))
+[ "$(fm_busy_copilot_abort_count "$log")" = 0 ] \
+  || fail "a reason under a different parent key must not qualify as a cancellation"
+[ "$(no_jq fm_busy_copilot_abort_count "$log")" = 0 ] \
+  || fail "the awk arm must also require the reason to sit under data"
+pass "busy: any abort closes the turn, but only a user-initiated one is a cancellation"
 
 # --- effective model --------------------------------------------------------
 

@@ -382,7 +382,9 @@ prepare_interrupt_ack() {
       # The baseline here is a COUNT rather than a run id, because copilot's
       # abort record names no turn. A cancellation is claimed only from a new
       # abort beyond this count, so an earlier interrupt's record cannot
-      # confirm this one.
+      # confirm this one. The count sees only aborts whose own data.reason says a
+      # human asked for it, so an abort from any other cause cannot be reported
+      # here as a landed interrupt.
       INTERRUPT_ACK_LOG=$(fm_busy_copilot_events "$STATE" "$ID" 2>/dev/null || true)
       [ -n "$INTERRUPT_ACK_LOG" ] || return 0
       INTERRUPT_ACK_RUN=$(fm_busy_copilot_abort_count "$INTERRUPT_ACK_LOG" 2>/dev/null || true)

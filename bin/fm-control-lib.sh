@@ -161,7 +161,11 @@ fm_control_interrupt_ack_source() {  # <harness>
     # {"type":"abort","data":{"reason":"user_initiated"}} into the bound
     # events.jsonl, observed promptly and reproduced on two separate turns, so
     # unlike cursor's variable-latency aborted close this IS an acknowledgement
-    # fm-control can assert.
+    # fm-control can assert. The baseline count behind this source matches on
+    # that nested reason, not on the abort record alone, so only a human
+    # cancellation can grow it; the busy fold reads any abort as a turn close.
+    # The token names the SOURCE - abort records in copilot's event log - which
+    # the narrowed match does not change.
     copilot) printf 'copilot-events-abort' ;;
     # cursor's transcript DOES type an aborted close, but its write latency
     # after an interrupt was measured as variable - sometimes seconds, sometimes
