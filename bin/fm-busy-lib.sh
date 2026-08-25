@@ -694,7 +694,7 @@ fm_busy_cursor_transcript() {  # <state-dir> <id>
 # assistant text quotes the close string cannot close it. The jq arm is used
 # when jq is installed and the awk arm is a full JSON-line parser for when it
 # is not; both must agree, which is what tests/fm-busy-state.test.sh pins.
-_fm_busy_jsonl_turn_fold() {  # <open-key> <open-value> <close-key> <close-values...>  [stdin: JSONL]
+_fm_busy_jsonl_turn_events() {  # <open-key> <open-value> <close-key> <close-values...>  [stdin: JSONL]
   local okey=$1 oval=$2 ckey=$3
   shift 3
   local cvals="$*"
@@ -825,7 +825,15 @@ _fm_busy_jsonl_turn_fold() {  # <open-key> <open-value> <close-key> <close-value
         print (valid && p > n ? event : "malformed")
       }
     '
-  fi | LC_ALL=C awk '
+  fi
+}
+
+# _fm_busy_jsonl_turn_fold: reduce that per-line stream to busy | settled | none.
+# Kept separate from the classifier above so a caller that needs the individual
+# records - counting how many closes a log holds, say - reaches the same
+# structural parse instead of falling back to a byte match on the same file.
+_fm_busy_jsonl_turn_fold() {  # <open-key> <open-value> <close-key> <close-values...>  [stdin: JSONL]
+  _fm_busy_jsonl_turn_events "$@" | LC_ALL=C awk '
     $0 == "close" { open = 0; seen = 1; malformed = 0; next }
     $0 == "open" { open = 1; seen = 1; next }
     $0 == "malformed" { if (!open) malformed = 1; next }
@@ -834,6 +842,19 @@ _fm_busy_jsonl_turn_fold() {  # <open-key> <open-value> <close-key> <close-value
       print (open ? "busy" : "settled")
     }
   '
+}
+
+# fm_busy_copilot_abort_count: how many user-initiated abort records the log
+# holds. A cancellation is claimed from a NEW abort appearing after the
+# interrupt key, never from the presence of one: the log accumulates every
+# earlier interrupt's aborts, so presence alone would confirm a cancellation
+# that already happened turns ago. The count is the pre-interrupt baseline,
+# exactly as muse captures the active run id before its key.
+fm_busy_copilot_abort_count() {  # <events-log>
+  [ -f "$1" ] || return 1
+  LC_ALL=C grep -aE '"abort"' "$1" \
+    | _fm_busy_jsonl_turn_events type __never__ type abort \
+    | LC_ALL=C grep -c '^close$' || true
 }
 
 # fm_busy_cursor_turn_state: cursor's turn is opened by a role:user record and

@@ -887,6 +887,12 @@ This row is a delivery guard for submit acknowledgement only; recorded worker st
 | Skill invocation | `/<skill>`; cursor discovers firstmate's user-level skills, and `/no-mistakes` autocompleted with firstmate's own description and invoked the skill |
 | Slash popup | real: the first Enter closes the popup and a SECOND Enter submits, the same hazard as grok, covered by the submit core's retried Enter |
 
+### ask_user parks the turn open
+
+A worker launched WITHOUT `--no-ask-user` and told to ask a question drew copilot's own selection dialog and stopped there.
+While it was parked, the event log's tail was `assistant.turn_start`, `user.message`, `assistant.message`, `tool.execution_start`, with no `turn_end`, and the fold read `busy`.
+A crewmate waiting indefinitely for a human would therefore report as working and never go stale, which is why `fm-spawn.sh` passes `--no-ask-user`.
+
 ### End-to-end
 
 A throwaway scout was spawned through `bin/fm-spawn.sh --scout --backend tmux` on a real cursor worker and driven to completion:
@@ -1055,7 +1061,8 @@ The session printed:
 
 and ran gpt-5.4, which is why `fm-spawn.sh` compares the effective model in the event log against the requested one and warns on a mismatch.
 
-Measured cost on one identical two-word prompt: `auto` 10.4 AI credits, `gpt-5.3-codex` 13.9, `gpt-5.5` 32.1, `claude-opus-5` 73.9.
+Per-class cost, measured on one identical two-word prompt during the task intake that commissioned this adapter rather than in the run above: `auto` 10.4 AI credits, `gpt-5.3-codex` 13.9, `gpt-5.5` 32.1, `claude-opus-5` 73.9.
+The figures observed directly here are consistent in scale: the whole verification session above spent 10.1 AI credits across five gpt-5.4 turns.
 
 ### Project instructions and skills
 
@@ -1073,8 +1080,10 @@ A throwaway scout was spawned through `bin/fm-spawn.sh --scout --backend tmux --
 3. `bin/fm-crew-state.sh` reported `state: working · harness busy (copilot-events)` mid-turn;
 4. the worker read the project's own `AGENTS.md`, wrote the requested file, and reported through the status protocol;
 5. `bin/fm-crew-state.sh` then reported `state: done`, and the fold read `idle copilot-events`;
-6. `bin/fm-control.sh <id> exit` stopped the agent and the pane returned to a shell;
-7. `bin/fm-teardown.sh` refused until the scout's report and captain-call gate were satisfied, then removed the session record.
+6. `bin/fm-send.sh` delivered a steer that reached the composer, and the worker read the durable inbox record, acted on it, and acknowledged it into `handled/`;
+7. `bin/fm-control.sh <id> interrupt` cancelled a running turn and reported `cancel=confirmed`, read from a NEW `abort` record beyond the pre-interrupt count;
+8. `bin/fm-control.sh <id> exit` stopped the agent and the pane returned to a shell;
+9. `bin/fm-teardown.sh` refused until the scout's report and captain-call gate were satisfied, then removed the session record.
 
 ## Pi supervision branch
 

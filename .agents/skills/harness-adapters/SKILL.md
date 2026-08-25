@@ -487,7 +487,7 @@ This home restricts copilot to GPT models by captain decision; Claude ids the CL
 | Models | `gpt-5.5` (top reasoning class registered here), `gpt-5.4` (this account's configured default), and `gpt-5.3-codex`. Validate against the running session's `/model` picker rather than a fixed list. |
 | Busy state | Its own durable session event log, folded on demand by `bin/fm-busy-lib.sh` (source `copilot-events`). Each inference step is bracketed by `assistant.turn_start` and `assistant.turn_end`, and a Ctrl+C interrupt closes with a typed `abort`, so this source covers manual interruption. Nothing is armed and no record is ever seeded. |
 | Exit command | `/exit`; one Enter submits it, and the pane prints `Resume this session with: copilot --resume=<session-id>` plus a credit and token summary. |
-| Interrupt | Single `Ctrl+C`, which cancels the turn and leaves the CLI running with an empty composer, so NO clear key is needed. `Esc` does NOT interrupt despite the footer's `esc interrupt` hint. |
+| Interrupt | Single `Ctrl+C`, which cancels the turn and leaves the CLI running with an empty composer, so NO clear key is needed. `Esc` does NOT interrupt despite the footer's `esc interrupt` hint. `bin/fm-control.sh interrupt` reports `cancel=confirmed`, claimed only from a NEW `abort` record beyond the count taken before the key, because the log keeps every earlier interrupt's aborts. |
 | Skill invocation | `/<skill>`, for example `/no-mistakes`. One Enter submits; the slash popup does not swallow it. |
 | Autonomy | `--yolo`, the documented alias for `--allow-all-tools --allow-all-paths --allow-all-urls`. `--allow-all` is the identical alias. |
 | Trust dialog | `Do you trust the files in this folder?` with `1. Yes` preselected, accepted by Enter. `--yolo` does NOT suppress it and no flag does, so `fm-spawn` clears it after launch. |
@@ -528,7 +528,7 @@ muse's run-level bracket has the same shape and the same precedent, and no inter
 A spawn that looked successful can therefore be running, and billing, a different and often far more expensive model than dispatch chose, which is why `fm-spawn` reads the effective model back from the same event log and warns on a mismatch.
 `gpt-4.1` is not available to this account at all, so it is not registered here despite being requested; `/model` is the surface that settles the current list.
 
-Cost scales steeply with reasoning class, so choose the model deliberately: measured on one identical two-word prompt, `auto` spent 10.4 AI credits, `gpt-5.3-codex` 13.9, `gpt-5.5` 32.1, and `claude-opus-5` 73.9.
+Cost scales steeply with reasoning class, so choose the model deliberately: on one identical two-word prompt `auto` spent 10.4 AI credits, `gpt-5.3-codex` 13.9, `gpt-5.5` 32.1, and `claude-opus-5` 73.9 (measured at the task intake that commissioned this adapter).
 
 ### Project instructions, ask_user, and reasoning summaries
 
@@ -536,8 +536,9 @@ Copilot loads the REPOSITORY's `AGENTS.md`, resolved from the git root and cwd, 
 A crewmate in a project worktree therefore picks up that project's own instructions; a probe that appeared to adopt firstmate's persona had simply been run inside the firstmate checkout.
 `--no-custom-instructions` would disable this and is deliberately never passed, because the crewmate contract depends on it.
 
-`fm-spawn` passes `--no-ask-user`.
-A pane parked on copilot's interactive `ask_user` question is invisible to firstmate's status protocol, and worse, an open question would leave that turn's `assistant.turn_start` unclosed, so the busy source would report a waiting worker busy indefinitely instead of letting it go stale.
+`fm-spawn` passes `--no-ask-user`, and this one is measured rather than assumed.
+A worker launched without that flag and told to ask a question drew copilot's own selection dialog and parked there with `assistant.turn_start` unclosed inside an open `tool.execution_start`, and the fold read `busy`.
+So a crewmate waiting indefinitely for a human would report as working and never go stale.
 Escalation rides the brief's status protocol instead.
 
 `--enable-reasoning-summaries` is deliberately not passed: it requests extra summary output for OpenAI models that nothing in firstmate reads, so it would spend tokens on text no supervision path consumes.

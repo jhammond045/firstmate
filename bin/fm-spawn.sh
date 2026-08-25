@@ -169,6 +169,10 @@
 # muse installs no hook at all - its plugin engine is off in the default build - so
 # it writes state/<id>.muse-session to bind the pane to muse's own session event
 # log; muse is crewmate/scout only and is refused for --secondmate.
+# copilot pins its session uuid with --session-id and writes
+# state/<id>.copilot-session (copilot_home, session_id), which binds the
+# session event log bin/fm-busy-lib.sh folds; it installs no hook, and it is
+# crewmate/scout only and refused for --secondmate.
 # cursor installs no per-task hook either: it writes state/<id>.cursor-session to
 # bind the pane to cursor's own conversation transcript (projects root, the exact
 # workspace path cursor records in .workspace-trusted, and the conversations that
@@ -1174,10 +1178,11 @@ launch_template() {
     # <copilot-home>/session-state/<that uuid>/events.jsonl.
     # --no-ask-user disables copilot's ask_user tool. A crewmate is told to work
     # on its own, and a pane parked on an interactive question is invisible to
-    # firstmate's status protocol; worse, an open question would leave that
-    # turn's assistant.turn_start unclosed, so the busy source would report a
-    # waiting worker busy indefinitely instead of letting it go stale.
-    # Escalation rides the brief's status protocol instead.
+    # firstmate's status protocol. Measured on 1.0.80: a worker parked on an
+    # ask_user question leaves that turn's assistant.turn_start unclosed inside
+    # an open tool.execution_start, and the fold reads busy - so without this
+    # flag a worker waiting indefinitely for a human reports as working rather
+    # than ever going stale. Escalation rides the brief's status protocol.
     # --no-custom-instructions is deliberately NOT passed: copilot loads AGENTS.md
     # from the git root and cwd, and the crewmate contract depends on the task
     # worktree's own project instructions being loaded. Verified: a copilot
@@ -3017,7 +3022,14 @@ if [ "$HARNESS" = copilot ]; then
   # gate just used, and a mismatch is reported loudly rather than failing the
   # spawn, because the worker is already doing real work by this point.
   if [ -n "$MODEL" ] && [ "$MODEL" != default ]; then
-    COPILOT_EFFECTIVE_MODEL=$(LC_ALL=C sed -n 's/.*"model"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+    # Read through jq so the model comes from an assistant.message's own
+    # top-level record, matching the structural standard the busy fold holds on
+    # this same file; a message whose text quoted "model": would otherwise
+    # trigger a spurious warning. Without jq the check is skipped rather than
+    # downgraded to a byte match.
+    COPILOT_EFFECTIVE_MODEL=$(LC_ALL=C jq -Rr 'try (fromjson
+      | select(type == "object" and .type? == "assistant.message")
+      | .data.model? // empty) catch empty' \
       "$(copilot_events_log)" 2>/dev/null | tail -1 || true)
     if [ -n "$COPILOT_EFFECTIVE_MODEL" ] && [ "$COPILOT_EFFECTIVE_MODEL" != "$MODEL" ]; then
       echo "warning: copilot task $ID requested model '$MODEL' but is running '$COPILOT_EFFECTIVE_MODEL'; copilot substitutes a model the account cannot reach instead of refusing. Check the id against this account's /model list." >&2

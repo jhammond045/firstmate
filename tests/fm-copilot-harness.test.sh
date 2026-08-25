@@ -179,6 +179,24 @@ bind_task "$CB/state" t-empty "$CB/home" s-empty
   || fail "a log with no turn record must be unknown, never idle"
 pass "busy: an absent, unbound, or record-free log is unknown rather than idle"
 
+# The interrupt acknowledgement counts closes rather than testing for presence:
+# the log keeps every earlier interrupt's abort, so presence alone would confirm
+# a cancellation that happened turns ago. bin/fm-control.sh takes this count
+# before delivering the key and claims confirmed only when it grows.
+log=$(write_events "$CB/home" s-two < <( { ev_turn_start 0; ev_abort; ev_turn_start 0; ev_abort; } ))
+[ "$(fm_busy_copilot_abort_count "$log")" = 2 ] \
+  || fail "the abort count must see both records (got '$(fm_busy_copilot_abort_count "$log")')"
+[ "$(PATH=/usr/bin:/bin fm_busy_copilot_abort_count "$log")" = 2 ] \
+  || fail "the awk arm must count aborts identically"
+log=$(write_events "$CB/home" s-noabort < <( { ev_turn_start 0; ev_turn_end 0; } ))
+[ "$(fm_busy_copilot_abort_count "$log")" = 0 ] \
+  || fail "a log with no abort must count zero"
+# A quoted abort must not inflate the count, for the same structural reason.
+log=$(write_events "$CB/home" s-quoteabort < <( { ev_turn_start 0; ev_quoting_message; } ))
+[ "$(fm_busy_copilot_abort_count "$log")" = 0 ] \
+  || fail "a message quoting abort must not count as a cancellation"
+pass "busy: the interrupt acknowledgement counts real abort records only"
+
 # The shared fold must still serve cursor identically after being parameterized.
 CUR=$TMP_ROOT/cursor.jsonl
 { printf '{"role":"user","text":"hi"}\n'; printf '{"type":"turn_ended","status":"aborted"}\n'; } > "$CUR"

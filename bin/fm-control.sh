@@ -378,16 +378,36 @@ prepare_interrupt_ack() {
       [ -n "$INTERRUPT_ACK_LOG" ] || return 0
       INTERRUPT_ACK_RUN=$(fm_busy_muse_active_run_id "$INTERRUPT_ACK_LOG" 2>/dev/null || true)
       ;;
+    copilot-events-abort)
+      # The baseline here is a COUNT rather than a run id, because copilot's
+      # abort record names no turn. A cancellation is claimed only from a new
+      # abort beyond this count, so an earlier interrupt's record cannot
+      # confirm this one.
+      INTERRUPT_ACK_LOG=$(fm_busy_copilot_events "$STATE" "$ID" 2>/dev/null || true)
+      [ -n "$INTERRUPT_ACK_LOG" ] || return 0
+      INTERRUPT_ACK_RUN=$(fm_busy_copilot_abort_count "$INTERRUPT_ACK_LOG" 2>/dev/null || true)
+      ;;
   esac
 }
 
 interrupt_cancel_claim() {
-  local elapsed=0 terminal=
+  local elapsed=0 terminal='' aborts=''
   case "$INTERRUPT_ACK_SOURCE:$INTERRUPT_ACK_RUN" in
-    muse-session-terminal:?*) ;;
+    muse-session-terminal:?*|copilot-events-abort:?*) ;;
     *) printf 'unconfirmed'; return 0 ;;
   esac
   while :; do
+    if [ "$INTERRUPT_ACK_SOURCE" = copilot-events-abort ]; then
+      aborts=$(fm_busy_copilot_abort_count "$INTERRUPT_ACK_LOG" 2>/dev/null || true)
+      case "$aborts" in
+        ''|*[!0-9]*) ;;
+        *) [ "$aborts" -gt "$INTERRUPT_ACK_RUN" ] && { printf 'confirmed'; return 0; } ;;
+      esac
+      awk -v e="$elapsed" -v t="$SETTLE_WAIT" 'BEGIN{exit !(e < t)}' || break
+      sleep "$POLL"
+      elapsed=$(awk -v e="$elapsed" -v p="$POLL" 'BEGIN{printf "%.3f", e + p}')
+      continue
+    fi
     terminal=$(fm_busy_muse_run_terminal "$INTERRUPT_ACK_LOG" "$INTERRUPT_ACK_RUN" 2>/dev/null || true)
     case "$terminal" in
       cancelled) printf 'confirmed'; return 0 ;;
