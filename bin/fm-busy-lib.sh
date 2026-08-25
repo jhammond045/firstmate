@@ -684,10 +684,11 @@ fm_busy_cursor_transcript() {  # <state-dir> <id>
   printf '%s' "$found"
 }
 
-# _fm_busy_jsonl_turn_fold: the ONE fold from an append-only JSONL turn log to
-# busy | settled | none, shared by every adapter whose harness writes one.
-# Callers name the records that open and close a turn; a turn left open past
-# its last close is busy and a trailing close is a settled turn.
+# _fm_busy_jsonl_turn_events: classify EACH LINE of an append-only JSONL turn
+# log as close | open | other | malformed, the one structural per-record parse
+# shared by every adapter whose harness writes such a log. Callers name the
+# records that open and close a turn; _fm_busy_jsonl_turn_fold below is what
+# reduces this stream to a verdict.
 #
 # Lifecycle records are matched on TOP-LEVEL fields of structurally valid JSON,
 # which is the property that makes the source trustworthy: a turn whose own
@@ -858,10 +859,14 @@ _fm_busy_jsonl_turn_events() {  # <qualifier> <open-key> <open-value> <close-key
   fi
 }
 
-# _fm_busy_jsonl_turn_fold: reduce that per-line stream to busy | settled | none.
+# _fm_busy_jsonl_turn_fold: the ONE reduction from that per-record stream to
+# busy | settled | none. A turn left open past its last close is busy and a
+# trailing close is a settled turn; a log with no lifecycle record at all, or
+# one whose only records are malformed, is none rather than either.
 # Kept separate from the classifier above so a caller that needs the individual
 # records - counting how many closes a log holds, say - reaches the same
 # structural parse instead of falling back to a byte match on the same file.
+# It takes the classifier's arguments unchanged and forwards them verbatim.
 _fm_busy_jsonl_turn_fold() {  # <qualifier> <open-key> <open-value> <close-key> <close-values...>  [stdin: JSONL]
   _fm_busy_jsonl_turn_events "$@" | LC_ALL=C awk '
     $0 == "close" { open = 0; seen = 1; malformed = 0; next }
@@ -945,7 +950,10 @@ fm_busy_cursor_turn_state() {  # <transcript>
 # does not appear once per interaction.
 #
 # Resolution needs no search, unlike muse's and cursor's, because fm-spawn
-# CHOOSES the session id with copilot's --session-id and records it here.
+# CHOOSES the session id with copilot's --session-id and records it here. Only
+# fm-spawn's TEMPLATE path pins one: a raw launch command names no session, so
+# no binding is written and every read below fails into unknown, which is the
+# correct verdict for a pane whose turn lifecycle firstmate cannot observe.
 fm_busy_copilot_binding_path() {  # <state-dir> <id>
   printf '%s/%s.copilot-session' "$1" "$2"
 }

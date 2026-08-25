@@ -2340,8 +2340,18 @@ kimi_wait_for_delivery() {
 # instant even without the dialog (copilot blocks on MCP server startup while it
 # loads instructions, plugins, hooks and skills), which is why the budget is
 # generous and the nudge is spaced rather than tight.
+# 0 when THIS spawn pinned copilot's session itself. Only the template path
+# resolves the home and chooses the session id, so a raw launch command - the
+# documented escape hatch for an unverified adapter - is legitimately unbound:
+# it has no event log to poll, no effective model to read back, and no sidecar
+# to write. Every consumer of the binding asks this rather than testing the
+# harness NAME, because the name is set on both paths and the binding is not.
+copilot_session_bound() {
+  [ -n "${COPILOT_HOME_DIR:-}" ] && [ -n "${COPILOT_SESSION_ID:-}" ]
+}
+
 copilot_events_log() {
-  [ -n "${COPILOT_HOME_DIR:-}" ] && [ -n "${COPILOT_SESSION_ID:-}" ] || return 1
+  copilot_session_bound || return 1
   printf '%s/session-state/%s/events.jsonl' "$COPILOT_HOME_DIR" "$COPILOT_SESSION_ID"
 }
 
@@ -2746,7 +2756,7 @@ EOF
       # it needs no search at all: fm-spawn CHOSE the session id above with
       # --session-id, so the log path is a direct lookup and a relaunch into a
       # reused worktree can never fold its predecessor's log.
-      if [ -n "${COPILOT_HOME_DIR:-}" ] && [ -n "${COPILOT_SESSION_ID:-}" ]; then
+      if copilot_session_bound; then
         {
           printf 'copilot_home=%s\n' "$COPILOT_HOME_DIR"
           printf 'session_id=%s\n' "$COPILOT_SESSION_ID"
@@ -3010,7 +3020,7 @@ if [ "${HERDR_PROJECTED:-0}" -eq 1 ]; then
   spawn_herdr_presentation_order_lock_release
 fi
 spawn_send_key "$T" Enter
-if [ "$HARNESS" = copilot ]; then
+if [ "$HARNESS" = copilot ] && copilot_session_bound; then
   if ! copilot_wait_for_delivery; then
     copilot_spawn_fail "copilot did not start a turn on the launch brief"
     exit 1
