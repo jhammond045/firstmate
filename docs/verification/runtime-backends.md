@@ -1025,7 +1025,8 @@ The live composer matrix reported `ok - copilot (GitHub Copilot CLI 1.0.80.): re
 
 ### Busy state
 
-Copilot writes `<copilot-home>/session-state/<session-id>/events.jsonl`, and `--session-id` lets firstmate choose that id, so the binding is a direct lookup:
+Copilot writes `<copilot-home>/session-state/<session-id>/events.jsonl`, and `--session-id` lets firstmate choose that id, so the binding is a direct lookup.
+The home itself is chosen by `COPILOT_HOME`, which `copilot help environment` on 1.0.80 documents as "override the directory where configuration and state files are stored; defaults to `$HOME/.copilot`", so `fm-spawn.sh` pins the resolved home into the launch env rather than trusting the pane shell to carry it:
 
 ```
 {"type":"assistant.turn_start","data":{"turnId":"0","interactionId":"4a246aad-..."}}
@@ -1060,6 +1061,8 @@ The session printed:
 ```
 
 and ran gpt-5.4, which is why `fm-spawn.sh` compares the effective model in the event log against the requested one and warns on a mismatch.
+The comparison is a plain string equality because `assistant.message`'s `data.model` carries the flag id verbatim, not the `/model` picker's display name: folding every `events.jsonl` under this machine's copilot home yielded only `gpt-5.4`, `gpt-4.1`, `gpt-5.3-codex`, `gpt-5.5`, `claude-sonnet-4.5`, `claude-sonnet-4.6`, and `claude-opus-5`.
+That record appears only once the first inference round completes, which is later than the `assistant.turn_start` the launch gate returns on, so the check waits for it under its own bounded budget and skips itself if it never arrives.
 
 Per-class cost, measured on one identical two-word prompt during the task intake that commissioned this adapter rather than in the run above: `auto` 10.4 AI credits, `gpt-5.3-codex` 13.9, `gpt-5.5` 32.1, `claude-opus-5` 73.9.
 The figures observed directly here are consistent in scale: the whole verification session above spent 10.1 AI credits across five gpt-5.4 turns.

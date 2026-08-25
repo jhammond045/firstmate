@@ -1194,7 +1194,7 @@ launch_template() {
     # copilot's folder-trust dialog is NOT suppressed by --yolo, so the gate
     # below clears it after launch; no flag suppresses it, and firstmate will
     # not write copilot's own managed trusted-folder store.
-    copilot) printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS -u CURSOR_AGENT -u CURSOR_INVOKED_AS __COPILOTBIN__ --yolo --no-ask-user --session-id __COPILOTSESSION__ __MODELFLAG____EFFORTFLAG__-i "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+    copilot) printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS -u CURSOR_AGENT -u CURSOR_INVOKED_AS COPILOT_HOME=__COPILOTHOME__ __COPILOTBIN__ --yolo --no-ask-user --session-id __COPILOTSESSION__ __MODELFLAG____EFFORTFLAG__-i "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
     # Kimi Code rejects a positional prompt, so it launches bare and receives
     # only an absolute brief pointer after the TUI readiness gate below.
     # Its turn-end signal is a globally configured Stop hook plus a guarded
@@ -1573,6 +1573,7 @@ case "$LAUNCH" in
     COPILOT_SESSION_ID=$(new_copilot_session_id) || exit 1
     LAUNCH=${LAUNCH//__COPILOTBIN__/$(shell_quote "$COPILOT_BIN")}
     LAUNCH=${LAUNCH//__COPILOTSESSION__/$(shell_quote "$COPILOT_SESSION_ID")}
+    LAUNCH=${LAUNCH//__COPILOTHOME__/$(shell_quote "$COPILOT_HOME_DIR")}
     ;;
 esac
 
@@ -2366,6 +2367,39 @@ copilot_wait_for_delivery() {
   copilot_turn_started
 }
 
+# The effective model copilot is actually running, read from its own event log.
+# It is carried by an assistant.message record, which copilot writes only once
+# the first inference round completes - the delivery gate above returns on
+# assistant.turn_start, which is strictly earlier and carries no model - so this
+# needs its own bounded wait rather than a read at gate-return time.
+#
+# Read through jq so the model comes from an assistant.message's own top-level
+# record, matching the structural standard the busy fold holds on this same file;
+# a message whose text quoted "model": would otherwise trigger a spurious
+# warning. Without jq there is no structural read, so the caller skips the check.
+copilot_effective_model() {
+  local log
+  log=$(copilot_events_log) || return 1
+  [ -f "$log" ] || return 1
+  LC_ALL=C jq -Rr 'try (fromjson
+    | select(type == "object" and .type? == "assistant.message")
+    | .data.model? // empty) catch empty' "$log" 2>/dev/null | tail -1
+}
+
+copilot_wait_for_effective_model() {
+  local i=0 max=${FM_COPILOT_MODEL_POLLS:-15} interval=${FM_COPILOT_POLL_INTERVAL:-1} model
+  while [ "$i" -lt "$max" ]; do
+    model=$(copilot_effective_model || true)
+    if [ -n "$model" ]; then
+      printf '%s\n' "$model"
+      return 0
+    fi
+    sleep "$interval"
+    i=$((i + 1))
+  done
+  return 1
+}
+
 copilot_spawn_fail() {  # <detail>
   printf 'failed: %s\n' "$1" >> "$STATE/$ID.status"
   echo "error: $1; inspect window $T" >&2
@@ -3020,17 +3054,10 @@ if [ "$HARNESS" = copilot ]; then
   # billing, a different and often far more expensive model than the one
   # dispatch chose. The effective model is read back from the same event log the
   # gate just used, and a mismatch is reported loudly rather than failing the
-  # spawn, because the worker is already doing real work by this point.
-  if [ -n "$MODEL" ] && [ "$MODEL" != default ]; then
-    # Read through jq so the model comes from an assistant.message's own
-    # top-level record, matching the structural standard the busy fold holds on
-    # this same file; a message whose text quoted "model": would otherwise
-    # trigger a spurious warning. Without jq the check is skipped rather than
-    # downgraded to a byte match.
-    COPILOT_EFFECTIVE_MODEL=$(LC_ALL=C jq -Rr 'try (fromjson
-      | select(type == "object" and .type? == "assistant.message")
-      | .data.model? // empty) catch empty' \
-      "$(copilot_events_log)" 2>/dev/null | tail -1 || true)
+  # spawn, because the worker is already doing real work by this point. A model
+  # that never appears within the budget is skipped for the same reason.
+  if [ -n "$MODEL" ] && [ "$MODEL" != default ] && command -v jq >/dev/null 2>&1; then
+    COPILOT_EFFECTIVE_MODEL=$(copilot_wait_for_effective_model || true)
     if [ -n "$COPILOT_EFFECTIVE_MODEL" ] && [ "$COPILOT_EFFECTIVE_MODEL" != "$MODEL" ]; then
       echo "warning: copilot task $ID requested model '$MODEL' but is running '$COPILOT_EFFECTIVE_MODEL'; copilot substitutes a model the account cannot reach instead of refusing. Check the id against this account's /model list." >&2
     fi
