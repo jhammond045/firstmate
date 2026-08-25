@@ -943,6 +943,139 @@ Refresh this harness-dependent proof before accepting a cursor upgrade:
 FM_HARNESS_LIVENESS_DRIFT=1 bin/fm-test-run.sh tests/fm-harness-liveness-drift-live-e2e.test.sh
 ```
 
+## GitHub Copilot CLI
+
+Copilot runs crewmate and scout work only; `bin/fm-spawn.sh` refuses `--secondmate` on it.
+The evidence below was produced on 2026-08-25 against the installed CLI on macOS 26.5.2 arm64 with tmux 3.7c, running as `jhammond`.
+
+- Binary: `~/.local/bin/copilot`, a single compiled Mach-O executable rather than a bundled script.
+- Version: `copilot --version` reported `GitHub Copilot CLI 1.0.80.`, authenticated as `jhammond045` on `https://github.com`.
+
+### Process identity
+
+Both name surfaces agree, which is why the classifier match is the anchored name `copilot` rather than a glob or an install-path fallback:
+
+| Source | Observed value |
+|---|---|
+| `#{pane_current_command}` | `copilot` |
+| `ps -o comm=` on the pane's foreground process | `/Users/jhammond/.local/bin/copilot` |
+
+The live liveness guard reported `copilot GitHub Copilot CLI 1.0.80.: title='copilot' foreground=[/Users/jhammond/.local/bin/copilot]` and classified `alive`.
+
+### Environment markers and detection ordering
+
+A copilot tool subprocess launched from a Claude Code primary reported:
+
+```
+CLAUDECODE=1
+COPILOT_AGENT_SESSION_ID=dfe4ee7c-aca3-4bb8-bdee-974acd98db8d
+COPILOT_CLI=1
+COPILOT_CLI_BINARY_VERSION=1.0.80
+COPILOT_LOADER_PID=5093
+```
+
+`CLAUDECODE=1` is the launching claude session's, retained rather than cleared, so ordering decides the verdict.
+`COPILOT_CLI=1 CLAUDECODE=1 bin/fm-harness.sh` prints `copilot`, and `CLAUDECODE=1 bin/fm-harness.sh` still prints `claude`.
+
+### Trust dialog
+
+A launch in a git repository copilot had not seen drew:
+
+```
+Confirm folder trust
+Do you trust the files in this folder?
+❯ 1. Yes
+  2. Yes, and remember this folder for future sessions
+  3. No (Esc)
+```
+
+`--yolo` did NOT suppress it, and no flag does; the persisted decision lives in copilot's own managed `trustedFolders` key in `~/.copilot/config.json`, which firstmate does not write.
+One Enter accepted it, and five further Enters into the idle composer left the session at `Session: 0 AIC used` with no `events.jsonl` and an empty composer, which is what makes the spawn gate's blind Enter safe.
+
+### Composer
+
+A bare `❯` (U+276F) prompt row drawn between two solid `─` rules, with no border and no idle placeholder:
+
+```
+────────────────────────────────────────
+❯
+────────────────────────────────────────
+ ← open sidebar · / commands · ? help · tab next tab                        GPT-5.4
+```
+
+The glyph is drawn in truecolor `38;2;129;139;152` (luminance ~137.5), above the 128 ghost threshold, so it is not stripped as ghost text.
+`#{cursor_y}` pointed at the glyph row itself with `#{cursor_flag}=1` both idle and with text typed, so copilot needs none of the cursor-row reclassification Cursor Agent CLI required.
+
+Copilot's brand mark is the shape that mattered:
+
+```
+  ╭─╮╭─╮
+  ╰─╯╰─╯  Copilot v1.0.80 uses AI.
+```
+
+Read as a single box top, that first row opened a box nothing closed, and the screen scan's unclosed-box rule then marked the WHOLE screen unsafe, so a real copilot pane classified `unknown` in every state.
+With the decoration guard in `bin/fm-composer-lib.sh`, the same captured panes classify `empty` idle and `pending` with text typed; the captures are pinned as `tests/fixtures/copilot-composer-{idle,pending}.ansi`.
+The live composer matrix reported `ok - copilot (GitHub Copilot CLI 1.0.80.): real idle composer classifies empty`.
+
+### Busy state
+
+Copilot writes `<copilot-home>/session-state/<session-id>/events.jsonl`, and `--session-id` lets firstmate choose that id, so the binding is a direct lookup:
+
+```
+{"type":"assistant.turn_start","data":{"turnId":"0","interactionId":"4a246aad-..."}}
+{"type":"tool.execution_start","data":{...}}
+{"type":"assistant.turn_end","data":{"turnId":"0"}}
+{"type":"abort","data":{"reason":"user_initiated"}}
+```
+
+Tool execution is bracketed INSIDE the turn pair, so a worker in a long foreground shell call reads busy.
+A Ctrl+C interrupt wrote `abort` twice and no matching `turn_end`, which is why `abort` is a close: without it an interrupted pane would read busy forever.
+The log is created only on the session's first turn, so a just-launched session directory holds `workspace.yaml` and an `inuse.<pid>.lock` but no `events.jsonl`, and classifies `unknown` rather than idle.
+
+The bracket is per inference step: one interaction emitted `turnId` 0 then 1 back to back, with `turn_end` at `18:41:15.057Z` and the next `turn_start` at `18:41:15.058Z`.
+No interaction-level close exists to use instead: a 17,060-line real session log contained 770 `assistant.turn_start`/`assistant.turn_end` pairs, 4 `user.message` records, no `session.usage_checkpoint` at all, and only 2 `session.task_complete`.
+
+### Interrupt
+
+`Escape` does NOT interrupt, despite the footer rendering `esc interrupt`.
+Six consecutive Escapes delivered through `tmux send-keys` left a running turn at `Working`, during both a foreground `sleep` tool call and plain inference.
+A single `Ctrl+C` cancelled the turn on both attempts, left `#{pane_current_command}` as `copilot`, wrote the `abort` record, and returned the composer to an empty `❯` with no restored prompt, so no clear key is needed.
+
+### Models and effort
+
+`copilot --help` enumerates `--effort, --reasoning-effort` choices as `none|minimal|low|medium|high|xhigh|max`.
+There is no `--list-models`; the running session's `/model` picker is the discovery surface, and it reported GPT-5.5, GPT-5.4, and GPT-5.3-Codex available to this account, with `gpt-4.1` absent from every group.
+
+`--model gpt-4.1` was not refused.
+The session printed:
+
+```
+✗ Model "gpt-4.1" from --model flag is not available. Using "gpt-5.4" instead.
+```
+
+and ran gpt-5.4, which is why `fm-spawn.sh` compares the effective model in the event log against the requested one and warns on a mismatch.
+
+Measured cost on one identical two-word prompt: `auto` 10.4 AI credits, `gpt-5.3-codex` 13.9, `gpt-5.5` 32.1, `claude-opus-5` 73.9.
+
+### Project instructions and skills
+
+`/instructions` listed `Repository (1/1) ✓ AGENTS.md (AGENTS.md)`, resolved from the git root and cwd.
+A worker in a scratch project whose `AGENTS.md` said to answer `SCRATCHPROBE` answered `SCRATCHPROBE`, confirming a crewmate picks up its own project's instructions.
+`copilot skill list` discovered firstmate's project skills from `.agents/skills/` and personal skills from `~/.agents/skills/`, and typing `/no-mistakes` autocompleted with firstmate's own description.
+A single Enter submitted `/help` from its slash popup, so copilot has neither grok's nor cursor's swallowed-first-Enter hazard; a command taking an argument first rewrites the composer to a hint placeholder, as `/model` became `/model [model]`.
+
+### End-to-end
+
+A throwaway scout was spawned through `bin/fm-spawn.sh --scout --backend tmux --harness copilot --model gpt-5.4 --effort low` in a throwaway `FM_HOME` and driven to completion:
+
+1. the launch delivered its brief through `-i` and the gate cleared the folder-trust dialog;
+2. `state/<id>.copilot-session` was written with the resolved copilot home and the pinned session id;
+3. `bin/fm-crew-state.sh` reported `state: working · harness busy (copilot-events)` mid-turn;
+4. the worker read the project's own `AGENTS.md`, wrote the requested file, and reported through the status protocol;
+5. `bin/fm-crew-state.sh` then reported `state: done`, and the fold read `idle copilot-events`;
+6. `bin/fm-control.sh <id> exit` stopped the agent and the pane returned to a shell;
+7. `bin/fm-teardown.sh` refused until the scout's report and captain-call gate were satisfied, then removed the session record.
+
 ## Pi supervision branch
 
 The supervision-branch extension (`.pi/extensions/fm-branch-supervision.ts`, [docs/pi-supervision-branch.md](../pi-supervision-branch.md)) builds its persistent second session through the Pi SDK surface: `createAgentSession` (including its `model`, `modelRuntime`, and `thinkingLevel` options), `DefaultResourceLoader` with `extensionFactories`, `SessionManager`, `createBashToolDefinition` with a `spawnHook`, `sendCustomMessage`, the `before_provider_request` hook, the command context's model registry for picker candidates, a fresh `ModelRuntime` for isolated-branch resolution, and Pi's own `getSupportedThinkingLevels`/`clampThinkingLevel` plus its `getThinkingLevel` and `thinking_level_select` extension surface for effort.

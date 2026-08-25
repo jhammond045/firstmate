@@ -3,7 +3,7 @@ name: harness-adapters
 description: >-
   Agent-only reference for firstmate harness operations.
   Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter.
-  Contains verified facts for claude, codex, opencode, pi, pi-signed, grok, kimi, cursor, and muse.
+  Contains verified facts for claude, codex, opencode, pi, pi-signed, grok, kimi, cursor, muse, and copilot.
 user-invocable: false
 metadata:
   internal: true
@@ -66,6 +66,7 @@ Grok selects native blocking or its pre-native bounded resume fallback from the 
 Kimi is outside the primary turn-end guard scope, while `docs/turnend-guard.md` owns its separate guarded global hook for crew wake signals.
 muse is CREWMATE/SCOUT ONLY and has no primary integration at all: its plugin engine (its only hook surface) is disabled in the default build, and its Claude-compatible hook dialect names `asyncRewake` and model reawakening as explicitly unsupported, which is exactly what a firstmate primary's turn-end supervision needs.
 `bin/fm-spawn.sh` refuses a `--secondmate` launch on muse for that reason.
+copilot is CREWMATE/SCOUT ONLY for the same reason from a different direction: it HAS a global hook surface (`~/.copilot/hooks/*.json`, version 1, carrying a `sessionStart` entry in a working installation), but the shipped CLI documents no hook event vocabulary and no turn-end or stop event is verified, so `bin/fm-spawn.sh` refuses `--secondmate` on it too.
 cursor HAS a full hooks system: 20 lifecycle events configurable at project scope in `.cursor/hooks.json`, plus a Claude-Code compatibility name map that also loads `<project>/.claude/settings.json`.
 Its `stop` step cannot block - exit 2 there is a silent no-op - so `bin/fm-turnend-guard-cursor.sh` parks the turn boundary on the watcher and returns one bounded `followup_message` instead.
 Because Cursor loads the tracked Claude settings too, every Claude-shaped entrypoint whose event Cursor covers stands down on a Cursor-delivered payload.
@@ -75,6 +76,7 @@ When changing any primary turn-end hook, validate the real harness behavior in a
 
 ## Primary pre-arm (PreToolUse) seatbelt
 
+copilot is outside the primary pre-arm scope for the same reason it is outside the turn-end guard scope.
 The primary integrations for `claude`, `codex`, `opencode`, `pi`, `pi-signed`, `grok`, and `cursor` also have wired PreToolUse-equivalent hooks that deny a watcher-arm anti-pattern (shell `&`, truncating pipe, bundling, broad `pkill -f fm-watch`) before it runs.
 `claude` and `codex` block directly through PreToolUse hooks; `grok` blocks the same way but requires every `$VAR` reference in its hook `command` string to carry an inline `:-default` or it fails to launch the hook entirely.
 `opencode`, `pi`, and `pi-signed` block by throwing from `tool.execute.before` / returning `{block: true}` from `tool_call`.
@@ -132,6 +134,7 @@ The supported launch-profile flags below are verified locally; each row records 
 | opencode | `--model <provider/model>` | none for firstmate's interactive launch | Verified on opencode 1.17.6. `opencode run` has `--variant`, but firstmate launches the interactive `opencode --prompt` path, which has no verified effort flag. |
 | kimi | `--model <model>` | none | Verified 2026-07-25 on Kimi Code CLI 0.29.1. |
 | cursor | `--model <model>` | none | Verified 2026-08-11 on Cursor Agent CLI 2026.08.11-e8db854. No effort flag exists, so firstmate records the requested effort in task metadata and omits it from the launch. Validate ids against `cursor-agent --list-models` rather than assuming a low/medium/high family: the live catalog carries only `-high` Grok ids. |
+| copilot | `--model <model>` | `--effort <low\|medium\|high\|xhigh\|max>` | Verified 2026-08-25 on GitHub Copilot CLI 1.0.80. `copilot --help` enumerates the accepted choices as `none\|minimal\|low\|medium\|high\|xhigh\|max`, so the whole shared vocabulary is reachable and `max` needs no alias; `none` and `minimal` sit below that vocabulary and stay unreachable. `--reasoning-effort` is an accepted alias. An UNAVAILABLE `--model` is NOT refused: copilot prints `Model "<m>" from --model flag is not available. Using "<other>" instead.` and runs the substitute, so `fm-spawn` warns when the effective model in the session event log differs from the requested one. |
 | muse | `--model <model>` | `--reasoning-effort <low\|medium\|high\|xhigh>`, and `ultra` only for an explicit `max` | Verified 2026-08-05 on Muse Code 0.1.0-R708.1. The flag accepts `none\|minimal\|low\|medium\|high\|xhigh\|ultra` and defaults to `high`. `ultra` is muse's max-class level, so it is reachable only through an explicit captain `max`, never from the generic fallback; `none` and `minimal` sit below the shared vocabulary and stay unreachable. |
 
 The concrete `harness` field owns adapter identity independently of the model provider: `harness=pi` with `model=xai/grok-*` is Pi using xAI, not `harness=grok`, and does not require Grok CLI login; `harness=grok` remains the standalone Grok Build CLI adapter.
@@ -152,6 +155,7 @@ Use the discovery surface in the current authenticated environment because suppo
 | grok | Run `grok models`, which lists the models available to the current Grok installation and account. |
 | kimi | Run `kimi provider list --json`, which lists the current provider and model configuration. |
 | cursor | Run `cursor-agent --list-models` (or the legacy `agent --list-models`), which lists the ids available to the current Cursor account. `cursor` is not the CLI name. |
+| copilot | Open the running session's `/model` picker. There is no `--list-models` and no non-interactive listing. The picker groups Recommended, New, Other, and Unavailable models for the CURRENT ACCOUNT, and a rejected `--model` also prints its own `✗ ... is not available` line into the session. Enumerating `~/.copilot/session-state/*/events.jsonl` is free but records only what has already been used, so it is history rather than an authoritative surface. |
 
 For an unfamiliar harness or model namespace, establish support and provider identity from that harness's authoritative CLI help, model listing, or current documentation rather than guessing from a name or prefix.
 A listing that reaches the account and does not contain the model is concrete evidence the model is unsupported: block that candidate and quote the result.
@@ -173,11 +177,13 @@ Natural language is acceptable if uncertain.
 - grok: `/<skill>`, for example `/no-mistakes` (same form as claude). Verified end to end: grok discovers the user-level `no-mistakes` skill, `/no-mistakes` invokes it, and grok drives a real `no-mistakes axi run`. Like codex's `$`/`/` popups, typing `/<skill>` opens grok's slash-autocomplete, so a too-fast Enter selects the popup entry instead of sending, and for an argument-taking command (like `/no-mistakes`'s optional task-first argument) that first Enter only expands the popup selection into an argument-hint placeholder rather than submitting - a genuine second Enter is required (see the grok section below for the 2026-07-03 incident and fix). `fm_tmux_submit_core`'s retried Enter (used by `fm-send` on the tmux backend) handles this through the shared structural composer classifier; the herdr backend needed a dedicated fix (`fm_backend_herdr_composer_state`, docs/herdr-backend.md) because its prior delta-based verification false-positived on that same popup-close content change.
 - kimi: `/<skill>`, for example `/no-mistakes`.
 - cursor: `/<skill>`, for example `/no-mistakes`. Cursor discovers firstmate's user-level skills. Its slash popup swallows the first Enter, so a genuine second Enter submits; the shared submit retry handles it.
+- copilot: `/<skill>`, for example `/no-mistakes`. Copilot discovers skills from the project's `.agents/skills/` and `.claude/skills/` plus personal `~/.copilot/skills/` and `~/.agents/skills/`, and `/no-mistakes` autocompleted with firstmate's own description. Unlike grok and cursor its slash popup does NOT swallow the first Enter: one Enter submits. A command that takes an ARGUMENT still rewrites the composer to an argument-hint placeholder (`/model` becomes `/model [model]`) before that Enter, which the shared classifier correctly reads as pending.
 
 ## Submission acknowledgement hazards
 
 A send or key action reporting success is not proof that the intended action happened.
 OpenCode can accept and queue an Enter while leaving text visible, Grok can consume Enter in its slash popup without submitting, and Kimi can silently drop a message sent before readiness even though the send returns success.
+Copilot puts a folder-trust dialog in front of a fresh path that no flag suppresses, so a launch can sit unstarted while the pane looks healthy; its spawn gate therefore proves delivery from a real `assistant.turn_start` in the session event log rather than from anything rendered.
 The shared symptom is a healthy-looking pane with no work in progress, so each adapter must verify the observable postcondition that is specific to its TUI.
 
 ## claude (VERIFIED; busy-state hooks live-verified 2026-07-28 on Claude Code 2.1.220)
@@ -467,6 +473,94 @@ The delivery-only spinner match covers the full moon-phase glyph set rather than
 Each Kimi crew worktree receives a gitignored `.fm-kimi-turnend` token pointer, and the global hook touches that task's `state/<id>.turn-ended` only when the Stop payload's `cwd`, pointer, and registry entry all agree.
 A guarded silent hook cannot be verified from absence of effect, so prove invocation with an unguarded probe before concluding that the hook did not fire.
 The guarded turn-end signal remains a wake notification; standalone Kimi has no busy-state source until one is live-verified.
+
+## copilot (VERIFIED CREWMATE/SCOUT 2026-08-25, GitHub Copilot CLI 1.0.80)
+
+GitHub Copilot CLI runs crewmate and scout work only.
+`bin/fm-spawn.sh` refuses `--secondmate` on copilot, and copilot has no supervision protocol under `docs/supervision-protocols/`, so a firstmate primary detected as copilot falls back to the `unknown` protocol.
+This home restricts copilot to GPT models by captain decision; Claude ids the CLI also accepts are deliberately not registered, because Claude work already has a verified adapter.
+
+| Fact | Value |
+|---|---|
+| Binary | Executable `copilot` from `PATH`, then executable `$HOME/.local/bin/copilot`; spawning refuses if neither exists. It is a single compiled executable, NOT a bundled node script, so the live process name really is `copilot` and no cursor-style reclassification is needed. |
+| Launch | `-i <prompt>` starts the interactive TUI and submits the prompt, so the brief rides the launch command as it does for grok, pi, and muse. |
+| Models | `gpt-5.5` (top reasoning class registered here), `gpt-5.4` (this account's configured default), and `gpt-5.3-codex`. Validate against the running session's `/model` picker rather than a fixed list. |
+| Busy state | Its own durable session event log, folded on demand by `bin/fm-busy-lib.sh` (source `copilot-events`). Each inference step is bracketed by `assistant.turn_start` and `assistant.turn_end`, and a Ctrl+C interrupt closes with a typed `abort`, so this source covers manual interruption. Nothing is armed and no record is ever seeded. |
+| Exit command | `/exit`; one Enter submits it, and the pane prints `Resume this session with: copilot --resume=<session-id>` plus a credit and token summary. |
+| Interrupt | Single `Ctrl+C`, which cancels the turn and leaves the CLI running with an empty composer, so NO clear key is needed. `Esc` does NOT interrupt despite the footer's `esc interrupt` hint. |
+| Skill invocation | `/<skill>`, for example `/no-mistakes`. One Enter submits; the slash popup does not swallow it. |
+| Autonomy | `--yolo`, the documented alias for `--allow-all-tools --allow-all-paths --allow-all-urls`. `--allow-all` is the identical alias. |
+| Trust dialog | `Do you trust the files in this folder?` with `1. Yes` preselected, accepted by Enter. `--yolo` does NOT suppress it and no flag does, so `fm-spawn` clears it after launch. |
+| Environment marker | `COPILOT_CLI=1` on child/tool processes, alongside `COPILOT_AGENT_SESSION_ID`, `COPILOT_CLI_BINARY_VERSION`, and `COPILOT_LOADER_PID`. |
+| Composer | A BARE row whose prompt glyph is `❯` (U+276F), the same glyph claude uses, drawn BETWEEN two solid `─` rules rather than inside a box. No idle placeholder or ghost text was observed. |
+| Effort | `--effort`; see the launch-profile table above. |
+| Resume | `copilot --resume=<session-id>` or `--continue` for the most recent session. |
+
+### Detection ordering is load-bearing
+
+Copilot does NOT clear an inherited `CLAUDECODE`, so a copilot worker under a claude primary carries both markers and whichever is tested first wins.
+This is the same trap cursor set, and the answer is the same: `bin/fm-harness.sh` tests `COPILOT_CLI` BEFORE the `CLAUDECODE` check, and the launch additionally clears the foreign markers.
+Both are kept, because launch sanitization only covers sessions fm-spawn started while the ordering also covers a copilot session a human started by hand.
+
+### The trust dialog blocks every spawn, and the gate clears it blind
+
+Every task gets a fresh worktree path, so without clearing this dialog every copilot spawn would block forever.
+`fm-spawn` waits for its own structural postcondition - an `assistant.turn_start` in the session's bound event log - and sends a blind Enter while that has not appeared.
+The Enter is blind on purpose: matching the dialog's wording would make a vendor string load-bearing, and a further Enter into the idle composer submits nothing, verified as five Enters leaving the session at 0 AI credits with no event log.
+Firstmate does not write copilot's own managed `trustedFolders` store in `~/.copilot/config.json`, the same boundary it keeps around grok's trust store.
+Startup is not instant even without the dialog, because copilot blocks on MCP server startup while loading instructions, plugins, hooks, and skills.
+
+### Session event log and the busy fold
+
+`--session-id` lets firstmate CHOOSE the session uuid, so the log path is a direct lookup at `<copilot-home>/session-state/<id>/events.jsonl` and needs none of the resolution muse and cursor require; `state/<id>.copilot-session` records the resolved home and that id.
+Three traps the fold already handles, which any change here must preserve.
+`abort` must be a close: a Ctrl+C leaves the interrupted `assistant.turn_start` with no matching `turn_end`, so a fold that knew only the turn pair would report that pane busy forever.
+Lifecycle records are matched on top-level fields of structurally valid JSON, so an assistant message that quotes `assistant.turn_end` cannot close a turn.
+And the log is created lazily on the session's first turn, so its absence is `unknown` rather than idle.
+
+Tool execution happens INSIDE the pair, so a worker sitting in a long foreground shell call reads busy - exactly where a rendered spinner or opencode's native idle verdict fails.
+The bracket is per INFERENCE STEP rather than per user interaction: one interaction emits turnId 0, 1, 2 back to back, leaving a sub-millisecond window between one step's close and the next step's open in which the log reads settled.
+muse's run-level bracket has the same shape and the same precedent, and no interaction-level close exists to use instead: `session.usage_checkpoint` was absent from a 17,060-line real session log entirely, and `session.task_complete` does not appear once per interaction.
+
+### An unavailable model is substituted, not refused
+
+`--model gpt-4.1` printed `✗ Model "gpt-4.1" from --model flag is not available. Using "gpt-5.4" instead.` and ran gpt-5.4.
+A spawn that looked successful can therefore be running, and billing, a different and often far more expensive model than dispatch chose, which is why `fm-spawn` reads the effective model back from the same event log and warns on a mismatch.
+`gpt-4.1` is not available to this account at all, so it is not registered here despite being requested; `/model` is the surface that settles the current list.
+
+Cost scales steeply with reasoning class, so choose the model deliberately: measured on one identical two-word prompt, `auto` spent 10.4 AI credits, `gpt-5.3-codex` 13.9, `gpt-5.5` 32.1, and `claude-opus-5` 73.9.
+
+### Project instructions, ask_user, and reasoning summaries
+
+Copilot loads the REPOSITORY's `AGENTS.md`, resolved from the git root and cwd, which `/instructions` lists as `Repository (1/1)`.
+A crewmate in a project worktree therefore picks up that project's own instructions; a probe that appeared to adopt firstmate's persona had simply been run inside the firstmate checkout.
+`--no-custom-instructions` would disable this and is deliberately never passed, because the crewmate contract depends on it.
+
+`fm-spawn` passes `--no-ask-user`.
+A pane parked on copilot's interactive `ask_user` question is invisible to firstmate's status protocol, and worse, an open question would leave that turn's `assistant.turn_start` unclosed, so the busy source would report a waiting worker busy indefinitely instead of letting it go stale.
+Escalation rides the brief's status protocol instead.
+
+`--enable-reasoning-summaries` is deliberately not passed: it requests extra summary output for OpenAI models that nothing in firstmate reads, so it would spend tokens on text no supervision path consumes.
+
+### Hooks, and why a secondmate is refused
+
+Copilot has a real global hook surface at `~/.copilot/hooks/*.json` (`version: 1`), and a working installation carried a `sessionStart` entry.
+The shipped CLI documents no hook event vocabulary at all - `copilot help` has no hooks topic - and no turn-end or stop event has been verified.
+A firstmate primary needs such a callback to keep the no-turn-ends-blind guard and its watcher supervision armed, so `--secondmate` is refused rather than half-wired.
+Verifying a stop-class hook event is what would reopen that decision.
+
+[`docs/verification/runtime-backends.md`](../../../docs/verification/runtime-backends.md) "GitHub Copilot CLI" owns the dated captures, and the guards that refresh them are:
+
+```bash
+FM_HARNESS_LIVENESS_DRIFT=1 bin/fm-test-run.sh tests/fm-harness-liveness-drift-live-e2e.test.sh
+FM_COMPOSER_MATRIX_LIVE=1 bin/fm-test-run.sh tests/fm-composer-matrix-live-e2e.test.sh
+```
+
+Spawn a copilot scout with an explicit model:
+
+```bash
+bin/fm-spawn.sh <task-id> <project> --scout --harness copilot --model gpt-5.5 --effort high
+```
 
 ## muse (VERIFIED 2026-08-05, Muse Code 0.1.0-R708.1, build sha 427a430436)
 

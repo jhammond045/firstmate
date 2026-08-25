@@ -38,6 +38,8 @@ An exit that delivers lifecycle input but cannot prove the agent stopped fails w
 Interrupt never rewrites busy state as proof of its own success.
 Claude exposes no lifecycle acknowledgement for a manual interrupt, so delivery succeeds with `cancel=unconfirmed` and its adapter-owned busy state remains as observed.
 muse's session log records `terminal=cancelled` for the interrupted run, so the control plane reports `cancel=confirmed` only after observing that exact acknowledgement.
+copilot's session event log types the same kind of acknowledgement, an `abort` record naming a user-initiated reason, so it is reported the same way.
+copilot is also the one verified adapter whose interrupt key is not Escape: its footer advertises one, but only Ctrl+C cancels a running turn.
 
 An interrupt is not complete until the composer is empty.
 muse is the one verified adapter that restores the cancelled prompt back into its composer as real text, so its interrupt key is followed by a Ctrl+U clear; without it the next submitted line - including this plane's own exit command - would concatenate onto the restored prompt and submit both as one line.
