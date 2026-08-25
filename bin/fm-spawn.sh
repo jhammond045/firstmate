@@ -3040,16 +3040,29 @@ if [ "$HARNESS" = copilot ] && copilot_session_bound; then
   # backends), so the check can be unavailable on a supported host. It says so
   # rather than passing silently, because an operator who is not told assumes
   # the protection ran.
+  # The budget is sized from real launches rather than guessed. The gate returns
+  # on assistant.turn_start, but data.model rides the first session-owned
+  # assistant.message, which copilot writes only once the first inference round
+  # completes. Measured over 137 real session logs on the verification machine,
+  # that gap ran a median of 11.8s, a 90th percentile of 21.9s, and a maximum of
+  # 55.0s - so a 15-poll budget missed roughly a quarter of real launches. 60
+  # polls at 1s covers every gap observed with headroom and stays bounded; the
+  # wait returns the moment the record lands, so a typical spawn pays the median
+  # rather than the budget.
   COPILOT_MODEL_LOG=$(copilot_events_log || true)
   if [ -n "$MODEL" ] && [ "$MODEL" != default ] && [ -n "$COPILOT_MODEL_LOG" ]; then
+    COPILOT_MODEL_POLLS=${FM_COPILOT_MODEL_POLLS:-60}
+    COPILOT_MODEL_INTERVAL=${FM_COPILOT_POLL_INTERVAL:-1}
     if command -v jq >/dev/null 2>&1; then
       COPILOT_EFFECTIVE_MODEL=$(fm_busy_copilot_wait_for_effective_model \
-        "$COPILOT_MODEL_LOG" "${FM_COPILOT_MODEL_POLLS:-15}" "${FM_COPILOT_POLL_INTERVAL:-1}" || true)
-      if [ -n "$COPILOT_EFFECTIVE_MODEL" ] && [ "$COPILOT_EFFECTIVE_MODEL" != "$MODEL" ]; then
+        "$COPILOT_MODEL_LOG" "$COPILOT_MODEL_POLLS" "$COPILOT_MODEL_INTERVAL" || true)
+      if [ -z "$COPILOT_EFFECTIVE_MODEL" ]; then
+        echo "notice: copilot task $ID requested model '$MODEL' but no session message naming a model appeared within $COPILOT_MODEL_POLLS polls ${COPILOT_MODEL_INTERVAL}s apart, so the model it is actually running was NOT verified; copilot substitutes a model the account cannot reach instead of refusing, and a substitution can bill a far more expensive class than dispatch chose. Raise FM_COPILOT_MODEL_POLLS if this task's first round is routinely slower." >&2
+      elif [ "$COPILOT_EFFECTIVE_MODEL" != "$MODEL" ]; then
         echo "warning: copilot task $ID requested model '$MODEL' but is running '$COPILOT_EFFECTIVE_MODEL'; copilot substitutes a model the account cannot reach instead of refusing. Check the id against this account's /model list." >&2
       fi
     else
-      echo "notice: copilot task $ID requested model '$MODEL' but jq is not installed on this host, so the model it is actually running was NOT checked; copilot substitutes a model the account cannot reach instead of refusing, and a substitution can bill a far more expensive class than dispatch chose. Install jq to restore the check." >&2
+      echo "notice: copilot task $ID requested model '$MODEL' but jq is not installed on this host, so the model it is actually running was NOT verified; copilot substitutes a model the account cannot reach instead of refusing, and a substitution can bill a far more expensive class than dispatch chose. Install jq to restore the check." >&2
     fi
   fi
 fi

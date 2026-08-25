@@ -703,8 +703,12 @@ fm_busy_cursor_transcript() {  # <state-dir> <id>
 # the same bytes - jq rejects a non-string, awk would have matched it.
 #
 # Lifecycle records are matched on TOP-LEVEL fields of structurally valid JSON,
-# which is the property that makes the source trustworthy: a turn whose own
-# assistant text quotes the close string cannot close it. The jq arm is used
+# which is the property that makes the source trustworthy: a record carrying the
+# close string anywhere OTHER than its own matched top-level field - a nested
+# value, a key under some other field - cannot close a turn. Assistant prose is
+# not the example to reach for, since valid JSON escapes every quote inside a
+# string and a caller's cheap prefilter selects on the quoted token, so prose
+# never reaches this parse at all. The jq arm is used
 # when jq is installed and the awk arm is a full JSON-line parser for when it
 # is not; both must agree, which is what the no-jq fallback case in
 # tests/fm-cursor-harness.test.sh and the jq/awk agreement case in
@@ -726,9 +730,13 @@ fm_busy_cursor_transcript() {  # <state-dir> <id>
 # pair and close pair name the SAME key and value gets `open` for a
 # qualifier-failing record, which in a fold RE-OPENS the turn rather than leaving
 # it inert. That is a trap for a future caller rather than a designed feature.
-# fm_busy_copilot_abort_count avoids it by passing `__never__` as the open key so
-# nothing can match open, and that is the pattern to copy when putting a
-# qualifier on a key that also opens.
+# fm_busy_copilot_abort_count avoids it by giving the open test a VALUE that
+# cannot occur: it passes `type` as the open key and `__never__` as the open
+# value, and no record's top-level type is ever `__never__`, so the open test
+# never matches and a qualifier-failing close lands on `other` as intended. The
+# rule to copy is the shape, not the token - when your close key is also your
+# open key, give the open test a value no record can carry, so the fall-through
+# has nowhere to land.
 _fm_busy_jsonl_turn_events() {  # <qualifier> <open-key> <open-value> <close-key> <close-values...>  [stdin: JSONL]
   local qual=$1 okey=$2 oval=$3 ckey=$4
   shift 4
@@ -1065,7 +1073,7 @@ fm_busy_copilot_effective_model() {  # <events-log>
 # prints nothing when the budget runs out, so a caller can skip its check rather
 # than fail or hang on a session that never produced one.
 fm_busy_copilot_wait_for_effective_model() {  # <events-log> [max-polls] [interval]
-  local log=$1 max=${2:-15} interval=${3:-1} i=0 model
+  local log=$1 max=${2:-60} interval=${3:-1} i=0 model
   while [ "$i" -lt "$max" ]; do
     model=$(fm_busy_copilot_effective_model "$log" 2>/dev/null || true)
     if [ -n "$model" ]; then

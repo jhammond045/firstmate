@@ -403,13 +403,13 @@ a=$(cls "$Q" "$R_PASS"); b=$(no_jq cls "$Q" "$R_PASS")
 [ "$a" = "$b" ] || fail "the arms disagree on a qualifier-passing record whose key also opens ($a vs $b)"
 [ "$a" = close ] || fail "a qualifier-passing record must still close (got '$a')"
 
-# The mitigation the abort counter uses: an open key nothing can match makes the
-# same qualifier-failing record inert.
+# The mitigation the abort counter uses: an open VALUE nothing can carry makes
+# the same qualifier-failing record inert. The open key is still `type`.
 inert() { printf '%s\n' "$R_FAIL" | _fm_busy_jsonl_turn_events "$Q" type __never__ type abort; }
 a=$(inert); b=$(no_jq inert)
-[ "$a" = "$b" ] || fail "the arms disagree once the open key cannot match ($a vs $b)"
-[ "$a" = other ] || fail "an unmatchable open key must leave a qualifier-failing record inert (got '$a')"
-pass "busy: the qualifier gates only the close test, and an unmatchable open key is what makes a failure inert"
+[ "$a" = "$b" ] || fail "the arms disagree once the open value cannot match ($a vs $b)"
+[ "$a" = other ] || fail "an unmatchable open value must leave a qualifier-failing record inert (got '$a')"
+pass "busy: the qualifier gates only the close test, and an unmatchable open value is what makes a failure inert"
 
 # --- effective model --------------------------------------------------------
 
