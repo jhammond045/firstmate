@@ -45,6 +45,15 @@ ev_tool_start() { printf '{"type":"tool.execution_start","data":{"toolName":"she
 ev_session_start() { printf '{"type":"session.start","data":{"sessionId":"%s"},"id":"0001"}\n' "$1"; }
 # The decoy: an assistant message whose own text quotes the close strings.
 ev_quoting_message() { printf '{"type":"assistant.message","data":{"model":"gpt-5.4","content":"I will now emit assistant.turn_end and abort."},"id":"bb02"}\n'; }
+ev_message() { printf '{"type":"assistant.message","data":{"model":"%s","content":"done"},"id":"cc01","timestamp":"2026-08-25T18:41:14.900Z"}\n' "$1"; }
+# A subagent message: same record type, its own model, and the parentToolCallId
+# that is the only structural field separating it from the session's own.
+ev_subagent_message() { printf '{"type":"assistant.message","data":{"model":"%s","parentToolCallId":"call_eyAKlPdL7lbnEpn1bhzfdoNL","content":"sub"},"id":"cc02"}\n' "$1"; }
+# A message with no model at all - common in real logs, and never an answer.
+ev_modelless_message() { printf '{"type":"assistant.message","data":{"content":"thinking"},"id":"cc03"}\n'; }
+# A message whose PROSE quotes a model id a byte match would seize on, while
+# its own record names the model the session is really running.
+ev_quoting_model_message() { printf '{"type":"assistant.message","data":{"model":"gpt-5.4","content":"Set \\"model\\":\\"gpt-4.1\\" in the config."},"id":"cc04"}\n'; }
 
 # write_events <copilot-home> <session-id>; body records read from stdin.
 write_events() {
@@ -156,11 +165,27 @@ bind_task "$CB/state" t-quote "$CB/home" s-quote
 pass "busy: a turn whose own text quotes the close string stays open"
 
 # Both parser arms must agree, because which one runs depends only on whether
-# jq happens to be installed.
+# jq happens to be installed. Forcing the awk arm needs an EXCLUSIVE PATH
+# holding only the utilities the copilot fold shells out to: prepending a
+# directory is not enough, because jq ships in /usr/bin on both platforms this
+# suite runs on and any inherited entry would resolve it and silently re-run the
+# jq arm. The fold pipes through grep as a prefilter as well as awk, so both are
+# linked in; the guard below is what keeps this case from going vacuous again.
+awk_bin=$(command -v awk) || fail "awk is required to exercise the no-jq fold"
+grep_bin=$(command -v grep) || fail "grep is required to exercise the no-jq fold"
+NO_JQ_BIN=$TMP_ROOT/no-jq-bin
+mkdir -p "$NO_JQ_BIN"
+ln -sf "$awk_bin" "$NO_JQ_BIN/awk"
+ln -sf "$grep_bin" "$NO_JQ_BIN/grep"
+if ( PATH="$NO_JQ_BIN"; command -v jq >/dev/null 2>&1 ); then
+  fail "the awk-arm PATH still resolves jq, so every assertion below would re-run the jq arm"
+fi
+pass "busy: the no-jq PATH genuinely hides jq, so the awk-arm cases below are not vacuous"
+
 for sid in s-open s-done s-abort s-quote; do
   L=$CB/home/session-state/$sid/events.jsonl
   a=$(fm_busy_copilot_turn_state "$L")
-  b=$(PATH=/usr/bin:/bin fm_busy_copilot_turn_state "$L")
+  b=$(PATH="$NO_JQ_BIN" fm_busy_copilot_turn_state "$L")
   [ "$a" = "$b" ] || fail "the jq and awk folds disagree on $sid ($a vs $b)"
 done
 pass "busy: the jq and awk folds agree on every fixture"
@@ -186,7 +211,7 @@ pass "busy: an absent, unbound, or record-free log is unknown rather than idle"
 log=$(write_events "$CB/home" s-two < <( { ev_turn_start 0; ev_abort; ev_turn_start 0; ev_abort; } ))
 [ "$(fm_busy_copilot_abort_count "$log")" = 2 ] \
   || fail "the abort count must see both records (got '$(fm_busy_copilot_abort_count "$log")')"
-[ "$(PATH=/usr/bin:/bin fm_busy_copilot_abort_count "$log")" = 2 ] \
+[ "$(PATH="$NO_JQ_BIN" fm_busy_copilot_abort_count "$log")" = 2 ] \
   || fail "the awk arm must count aborts identically"
 log=$(write_events "$CB/home" s-noabort < <( { ev_turn_start 0; ev_turn_end 0; } ))
 [ "$(fm_busy_copilot_abort_count "$log")" = 0 ] \
@@ -203,6 +228,53 @@ CUR=$TMP_ROOT/cursor.jsonl
 [ "$(fm_busy_cursor_turn_state "$CUR")" = settled ] \
   || fail "the shared fold must still close a cursor turn on turn_ended"
 pass "busy: the shared JSONL fold still serves cursor's own records"
+
+# --- effective model --------------------------------------------------------
+
+# The substitution warning's whole correctness is about WHEN the model is read.
+# copilot writes assistant.message only once the first inference round
+# completes, which is strictly later than the assistant.turn_start the launch
+# gate returns on, so a read taken at gate-return time finds nothing and the
+# warning silently never fires. These cases pin the timing rather than the text.
+L=$(write_events "$CB/home" s-model-none < <( ev_turn_start 0 ))
+[ -z "$(fm_busy_copilot_effective_model "$L")" ] \
+  || fail "a log holding only turn_start must yield no model, the shape the gate returns on"
+
+# The bounded wait must give up rather than fail the spawn or hang.
+out=$(fm_busy_copilot_wait_for_effective_model "$L" 3 0.05) && rc=0 || rc=$?
+[ "$rc" != 0 ] || fail "the wait must report failure when no model record ever arrives"
+[ -z "$out" ] || fail "an exhausted budget must print nothing (got '$out')"
+pass "effective model: the record the gate returns on carries none, and the wait gives up bounded"
+
+# The regression itself: a single immediate read - the broken shape - returns
+# nothing here, so only a wait that actually polls can see the appended record.
+L=$(write_events "$CB/home" s-model-late < <( ev_turn_start 0 ))
+( sleep 0.5; ev_message gpt-5.4 >> "$L" ) &
+appender=$!
+out=$(fm_busy_copilot_wait_for_effective_model "$L" 50 0.1) && rc=0 || rc=$?
+wait "$appender"
+[ "$rc" = 0 ] || fail "the wait must succeed once the assistant.message lands"
+[ "$out" = gpt-5.4 ] || fail "the wait must report the model that landed (got '$out')"
+pass "effective model: the wait keeps polling until the record copilot writes late arrives"
+
+# A subagent carries its own data.model and must never be mistaken for the
+# session's: in real 1.0.80 logs every non-session model id came from one.
+L=$(write_events "$CB/home" s-model-sub < <( { ev_turn_start 0; ev_message gpt-5.4; ev_subagent_message gpt-4.1; } ))
+[ "$(fm_busy_copilot_effective_model "$L")" = gpt-5.4 ] \
+  || fail "a subagent's model must not be reported as the session's"
+# ... including when the subagent message is the newest record in the log.
+L=$(write_events "$CB/home" s-model-subtail < <( { ev_turn_start 0; ev_subagent_message gpt-4.1; ev_message gpt-5.4; ev_subagent_message claude-sonnet-4.5; } ))
+[ "$(fm_busy_copilot_effective_model "$L")" = gpt-5.4 ] \
+  || fail "a trailing subagent message must not decide the session's model"
+# A model-less message is skipped rather than answered with.
+L=$(write_events "$CB/home" s-model-empty < <( { ev_turn_start 0; ev_modelless_message; ev_message gpt-5.5; } ))
+[ "$(fm_busy_copilot_effective_model "$L")" = gpt-5.5 ] \
+  || fail "a message carrying no model must be skipped, not treated as an answer"
+# A model id quoted inside assistant prose is not a model record.
+L=$(write_events "$CB/home" s-model-quote < <( { ev_turn_start 0; ev_quoting_model_message; } ))
+[ "$(fm_busy_copilot_effective_model "$L")" = gpt-5.4 ] \
+  || fail "the structural read must take the record's own data.model field, not a model id in its prose"
+pass "effective model: only the session's own message with a model field decides"
 
 # --- composer shape ---------------------------------------------------------
 

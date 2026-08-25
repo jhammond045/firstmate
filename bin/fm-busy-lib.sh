@@ -932,6 +932,61 @@ fm_busy_copilot_turn_state() {  # <events-log>
     | _fm_busy_jsonl_turn_fold type assistant.turn_start type assistant.turn_end abort
 }
 
+# fm_busy_copilot_effective_model: which model this session is actually running,
+# read from its own event log. Copilot SILENTLY downgrades a model the account
+# cannot reach, so the requested id is not the billed one.
+#
+# The value is carried by an assistant.message record, which copilot writes only
+# once the first inference round completes - strictly later than the
+# assistant.turn_start a launch gate returns on, and later still than
+# session.start - so a caller reading at gate-return time finds nothing. That is
+# what fm_busy_copilot_wait_for_effective_model exists to bound.
+#
+# SUBAGENT messages carry their own data.model and are excluded on
+# data.parentToolCallId, which is present on a subagent message and absent on
+# the session's own. Folding this machine's 137 real 1.0.80 session logs: every
+# gpt-4.1 (180), claude-sonnet-4.5 (68), and claude-sonnet-4.6 (40) record was a
+# subagent one, while the session's own messages only ever carried the model the
+# session was launched with. Without the exclusion a subagent could be reported
+# as the session's model.
+#
+# The first qualifying record wins, because the question is which model this
+# spawn started on. Records with no model field at all are common (1,774 of the
+# session-own messages in that same fold), so they are skipped rather than
+# treated as an answer.
+#
+# jq is required: there is no structural parse without it, and a byte match
+# would accept a model id quoted inside assistant prose. An absent jq returns
+# non-zero so the caller skips the check rather than acting on a guess.
+fm_busy_copilot_effective_model() {  # <events-log>
+  [ -f "$1" ] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  LC_ALL=C grep -aE '"assistant\.message"' "$1" \
+    | LC_ALL=C jq -Rr 'try (fromjson
+      | select(type == "object" and .type? == "assistant.message"
+               and (.data.parentToolCallId? | not))
+      | .data.model? // empty) catch empty' \
+    | head -1
+}
+
+# fm_busy_copilot_wait_for_effective_model: the bounded poll for that record.
+# Prints the model and returns 0 as soon as one exists; returns non-zero and
+# prints nothing when the budget runs out, so a caller can skip its check rather
+# than fail or hang on a session that never produced one.
+fm_busy_copilot_wait_for_effective_model() {  # <events-log> [max-polls] [interval]
+  local log=$1 max=${2:-15} interval=${3:-1} i=0 model
+  while [ "$i" -lt "$max" ]; do
+    model=$(fm_busy_copilot_effective_model "$log" 2>/dev/null || true)
+    if [ -n "$model" ]; then
+      printf '%s\n' "$model"
+      return 0
+    fi
+    sleep "$interval"
+    i=$((i + 1))
+  done
+  return 1
+}
+
 # fm_busy_grok_tail_busy: the Grok-only temporary rendered-tail fallback.
 # Consumes the tail on stdin; 0 when Grok's verified busy signature matches.
 # FM_BUSY_REGEX still globally overrides the signature, mirroring the

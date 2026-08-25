@@ -1061,8 +1061,23 @@ The session printed:
 ```
 
 and ran gpt-5.4, which is why `fm-spawn.sh` compares the effective model in the event log against the requested one and warns on a mismatch.
-The comparison is a plain string equality because `assistant.message`'s `data.model` carries the flag id verbatim, not the `/model` picker's display name: folding every `events.jsonl` under this machine's copilot home yielded only `gpt-5.4`, `gpt-4.1`, `gpt-5.3-codex`, `gpt-5.5`, `claude-sonnet-4.5`, `claude-sonnet-4.6`, and `claude-opus-5`.
-That record appears only once the first inference round completes, which is later than the `assistant.turn_start` the launch gate returns on, so the check waits for it under its own bounded budget and skips itself if it never arrives.
+The comparison is a plain string equality because `assistant.message`'s `data.model` carries the flag id verbatim, not the `/model` picker's display name.
+Folding every `events.jsonl` under this machine's copilot home splits by `data.parentToolCallId`, which is present on a SUBAGENT message and absent on the session's own:
+
+| | session's own | subagent |
+| --- | --- | --- |
+| `gpt-5.4` | 10102 | 2445 |
+| `gpt-5.3-codex` | 2 | 0 |
+| `gpt-5.5` | 1 | 0 |
+| `claude-opus-5` | 1 | 0 |
+| `gpt-4.1` | 0 | 180 |
+| `claude-sonnet-4.5` | 0 | 68 |
+| `claude-sonnet-4.6` | 0 | 40 |
+| no model field | 1774 | 1402 |
+
+So `gpt-4.1` really is unreachable through `--model` while still being routed to by subagents, and the effective-model read excludes subagent records for exactly that reason - a subagent would otherwise be reported as the model this spawn is running.
+Records carrying no model field at all are common, so the read skips them rather than treating the first message as an answer.
+The record appears only once the first inference round completes, which is later than the `assistant.turn_start` the launch gate returns on, so the check waits for it under its own bounded budget and skips itself if it never arrives.
 
 Per-class cost, measured on one identical two-word prompt during the task intake that commissioned this adapter rather than in the run above: `auto` 10.4 AI credits, `gpt-5.3-codex` 13.9, `gpt-5.5` 32.1, `claude-opus-5` 73.9.
 The figures observed directly here are consistent in scale: the whole verification session above spent 10.1 AI credits across five gpt-5.4 turns.

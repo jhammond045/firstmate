@@ -526,7 +526,8 @@ muse's run-level bracket has the same shape and the same precedent, and no inter
 
 `--model gpt-4.1` printed `✗ Model "gpt-4.1" from --model flag is not available. Using "gpt-5.4" instead.` and ran gpt-5.4.
 A spawn that looked successful can therefore be running, and billing, a different and often far more expensive model than dispatch chose, which is why `fm-spawn` reads the effective model back from the same event log and warns on a mismatch.
-`gpt-4.1` is not available to this account at all, so it is not registered here despite being requested; `/model` is the surface that settles the current list.
+`gpt-4.1` is not available to this account through `--model`, so it is not registered here despite being requested; `/model` is the surface that settles the current list.
+It is still reachable through subagent routing - every `gpt-4.1` record in this machine's session logs is a subagent message - which is why the effective-model read excludes those rather than reporting one as the session's model.
 
 Cost scales steeply with reasoning class, so choose the model deliberately: on one identical two-word prompt `auto` spent 10.4 AI credits, `gpt-5.3-codex` 13.9, `gpt-5.5` 32.1, and `claude-opus-5` 73.9 (measured at the task intake that commissioned this adapter).
 
