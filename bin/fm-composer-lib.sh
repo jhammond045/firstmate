@@ -56,8 +56,14 @@
 #                still starts and ends with the family's rule glyph is
 #                tolerated, not ambiguity.
 #   bare       - an agent prompt glyph row with no border at all (claude `❯`,
-#                codex `›`, muse `⟩`, cursor `→`). The agent glyph is itself the container
+#                codex `›`, muse `⟩`, cursor `→`, copilot `❯`). The agent glyph
+#                is itself the container
 #                proof; a bare SHELL glyph (`>` `$` `%` `#`) never is.
+#                copilot draws that bare glyph row BETWEEN two solid `─` rules,
+#                so its pane matches the bare shape and the pi separated shape
+#                at once; the bare glyph wins because it is real container
+#                proof, which is what _fm_composer_classify_bare_pi_overlap
+#                already resolves.
 #   left-bar   - opencode: rows prefixed by a heavy left bar `┃` with no
 #                closing border, holding the idle hint, blank rows, and a
 #                mode/model footer line.
@@ -586,6 +592,37 @@ _fm_composer_pi_separator_row() {  # <trimmed-row>
 
 # Row-scan results are returned through FM_COMPOSER_SCAN_* globals (bash 3.2
 # has no nameref); they are internal to this owner.
+# 0 when a corner-bounded row carries MORE than one box: after its own outer
+# corners are stripped the inner still holds a corner glyph of the same family.
+# GitHub Copilot draws its brand mark as `╭─╮╭─╮` above `╰─╯╰─╯` - two tiny
+# side-by-side boxes - in its startup disclaimer and again in its exit summary.
+# Read as a single box top, that first row opens a box nothing ever closes, and
+# the scan's unclosed-box rule then marks the WHOLE screen unsafe, so every
+# copilot pane classified `unknown` while the mark was on screen and no steer
+# could ever confirm an empty composer. A real composer border carries exactly
+# two corners, so this can never reject one; a title embedded in a border
+# (grok writes its model name there) carries none at all.
+# Strips are literal per family, never `${v#?}`, because that removes one BYTE
+# under LC_ALL=C and one CHARACTER under UTF-8 (see UNICODE WHITESPACE above).
+_fm_composer_row_is_multibox() {  # <trimmed-row> <family>
+  local inner=$1
+  case "$2" in
+    rounded)
+      inner=${inner#╭}; inner=${inner#╰}; inner=${inner%╮}; inner=${inner%╯}
+      case "$inner" in *╭*|*╮*|*╰*|*╯*) return 0 ;; esac ;;
+    light)
+      inner=${inner#┌}; inner=${inner#└}; inner=${inner%┐}; inner=${inner%┘}
+      case "$inner" in *┌*|*┐*|*└*|*┘*) return 0 ;; esac ;;
+    double)
+      inner=${inner#╔}; inner=${inner#╚}; inner=${inner%╗}; inner=${inner%╝}
+      case "$inner" in *╔*|*╗*|*╚*|*╝*) return 0 ;; esac ;;
+    heavy)
+      inner=${inner#┏}; inner=${inner#┗}; inner=${inner%┓}; inner=${inner%┛}
+      case "$inner" in *┏*|*┓*|*┗*|*┛*) return 0 ;; esac ;;
+  esac
+  return 1
+}
+
 _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap]
   local pane=$1 cy=${2:-}
   local line indent left_stripped trimmed kind family side_family
@@ -630,6 +667,14 @@ _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap]
       '┗'*'┛') kind=bottom; family=heavy ;;
       '+'*'+') kind=ascii; family=ascii ;;
     esac
+    # A corner-bounded row that still holds a corner INSIDE it is decoration -
+    # several tiny boxes drawn on one row - not one composer border, so it must
+    # not open or close the box state machine.
+    if [ -n "$family" ] && [ "$family" != ascii ] \
+       && _fm_composer_row_is_multibox "$trimmed" "$family"; then
+      kind=
+      family=
+    fi
     # Pi separator rows: a solid `─` rule at least 8 columns wide. A separator
     # closes the preceding candidate and immediately opens the next, so an
     # earlier transcript rule can never outrank the live bottom composer pair.
