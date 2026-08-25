@@ -171,8 +171,9 @@ pass "busy: abort closes an interrupted turn"
 # the prefilter discards would yield the same busy verdict as one the parser
 # rejected, and that ambiguity is what made this case vacuous before.
 log=$(write_events "$CB/home" s-quote < <( { ev_turn_start 0; ev_quoting_message; } ))
-LC_ALL=C grep -q '"abort"' "$log" && LC_ALL=C grep -q '"assistant\.turn_end"' "$log" \
-  || fail "the decoy no longer carries the close strings in quoted form, so the prefilter would discard it and this case would prove nothing"
+if ! LC_ALL=C grep -q '"abort"' "$log" || ! LC_ALL=C grep -q '"assistant\.turn_end"' "$log"; then
+  fail "the decoy no longer carries the close strings in quoted form, so the prefilter would discard it and this case would prove nothing"
+fi
 bind_task "$CB/state" t-quote "$CB/home" s-quote
 [ "$(fm_busy_classify tmux w copilot t-quote "$CB/state")" = "busy copilot-events" ] \
   || fail "a record carrying the close string outside its own type must not close the turn"
