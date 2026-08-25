@@ -716,8 +716,19 @@ fm_busy_cursor_transcript() {  # <state-dir> <id>
 # what a record MEANS: copilot's abort record types the same for every cause and
 # only its nested data.reason says a human asked for it. The value set is
 # comma-delimited rather than space-delimited like the close set, because a real
-# reason value contains a space. A record that closes but fails the qualifier is
-# reported as `other`, so it is simply not a close for that caller.
+# reason value contains a space. The match is exactly ONE level deep - a
+# top-level <parent> object holding <child> - so neither a <child> sitting at top
+# level nor one nested deeper qualifies.
+#
+# The qualifier gates the CLOSE test ONLY. A record that matches the close key
+# but fails the qualifier does NOT become `other` directly: it falls through to
+# the OPEN test, and is `other` only when that fails too. So a caller whose open
+# pair and close pair name the SAME key and value gets `open` for a
+# qualifier-failing record, which in a fold RE-OPENS the turn rather than leaving
+# it inert. That is a trap for a future caller rather than a designed feature.
+# fm_busy_copilot_abort_count avoids it by passing `__never__` as the open key so
+# nothing can match open, and that is the pattern to copy when putting a
+# qualifier on a key that also opens.
 _fm_busy_jsonl_turn_events() {  # <qualifier> <open-key> <open-value> <close-key> <close-values...>  [stdin: JSONL]
   local qual=$1 okey=$2 oval=$3 ckey=$4
   shift 4

@@ -368,6 +368,32 @@ a=$(fm_busy_copilot_abort_count "$L"); b=$(no_jq fm_busy_copilot_abort_count "$L
 [ "$a" = 0 ] || fail "a later duplicate data without a reason must override an earlier one (got '$a')"
 pass "busy: a duplicate key is decided by its last occurrence, and both arms agree which"
 
+# The qualifier gates the CLOSE test only, so a record that fails it falls
+# through to the OPEN test rather than becoming inert. That is invisible to
+# today's callers - the abort counter passes an open key nothing can match - but
+# it is the contract the next adapter author wires against, so pin the verdict
+# both ways round through the classifier itself.
+cls() { printf '%s\n' "$2" | _fm_busy_jsonl_turn_events "$1" type abort type abort; }
+R_FAIL='{"type":"abort","data":{"reason":"context_limit"}}'
+R_PASS='{"type":"abort","data":{"reason":"user_initiated"}}'
+Q='data.reason=user_initiated'
+
+a=$(cls "$Q" "$R_FAIL"); b=$(no_jq cls "$Q" "$R_FAIL")
+[ "$a" = "$b" ] || fail "the arms disagree on a qualifier-failing record whose key also opens ($a vs $b)"
+[ "$a" = open ] || fail "a qualifier-failing close must fall through to the open test (got '$a')"
+
+a=$(cls "$Q" "$R_PASS"); b=$(no_jq cls "$Q" "$R_PASS")
+[ "$a" = "$b" ] || fail "the arms disagree on a qualifier-passing record whose key also opens ($a vs $b)"
+[ "$a" = close ] || fail "a qualifier-passing record must still close (got '$a')"
+
+# The mitigation the abort counter uses: an open key nothing can match makes the
+# same qualifier-failing record inert.
+inert() { printf '%s\n' "$R_FAIL" | _fm_busy_jsonl_turn_events "$Q" type __never__ type abort; }
+a=$(inert); b=$(no_jq inert)
+[ "$a" = "$b" ] || fail "the arms disagree once the open key cannot match ($a vs $b)"
+[ "$a" = other ] || fail "an unmatchable open key must leave a qualifier-failing record inert (got '$a')"
+pass "busy: the qualifier gates only the close test, and an unmatchable open key is what makes a failure inert"
+
 # --- effective model --------------------------------------------------------
 
 # The substitution warning's whole correctness is about WHEN the model is read.
