@@ -1078,7 +1078,7 @@ That corpus is 137 logs spanning CLI 1.0.20 through 1.0.80 rather than 1.0.80 al
 
 So `gpt-4.1` really is unreachable through `--model` while still being routed to by subagents, and the effective-model read excludes subagent records for exactly that reason - a subagent would otherwise be reported as the model this spawn is running.
 Records carrying no model field at all are common, so the read skips them rather than treating the first message as an answer.
-The record appears only once the first inference round completes, which is later than the `assistant.turn_start` the launch gate returns on, so the check waits for it under its own bounded budget and skips itself if it never arrives.
+The record appears only once the first inference round completes, which is later than the `assistant.turn_start` the launch gate returns on, so the check waits for it under its own bounded budget and the spawn says so rather than passing silently when it cannot conclude: once because the record never arrived within that budget, and, without waiting at all, once because `jq` is absent and the value cannot be read from the record's own field.
 
 Per-class cost, measured on one identical two-word prompt during the task intake that commissioned this adapter rather than in the run above: `auto` 10.4 AI credits, `gpt-5.3-codex` 13.9, `gpt-5.5` 32.1, `claude-opus-5` 73.9.
 The figures observed directly here are consistent in scale: the whole verification session above spent 10.1 AI credits across five gpt-5.4 turns.
