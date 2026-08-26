@@ -1023,8 +1023,14 @@ housekeeping() {  # <state>
     case "$?" in
       0) rm -f "$marker" ;;
       2) rm -f "$marker" ;;
-      *) escalate_add "$state" "stale persisted ${age}s (possible wedge): $win"
-         stale_marker_remove "$win" "$state" ;;
+      *)
+        if crew_pipeline_agent_live "$task" "$state"; then
+          _now > "$marker"
+          continue
+        fi
+        escalate_add "$state" "stale persisted ${age}s (possible wedge): $win"
+        stale_marker_remove "$win" "$state"
+        ;;
     esac
   done
 
