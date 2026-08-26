@@ -150,13 +150,17 @@ fm_nm_csv_field() {  # <row> <1-based-n>
   return 1
 }
 
-# 0 if pid $1 names a still-running process. Rejects empty, non-numeric, and 0.
+# 0 if pid $1 names a still-running process. Rejects empty, non-numeric, 0,
+# and zombies.
 # kill -0 succeeds when the caller may signal the pid; ps -p covers EPERM
 # (process exists but belongs to another user).
 fm_nm_pid_is_live() {  # <pid>
-  local pid=$1
+  local pid=$1 stat
   case "$pid" in ''|*[!0-9]*|0) return 1 ;; esac
+  stat=$(ps -p "$pid" -o stat= 2>/dev/null | sed -n '1s/^[[:space:]]*//;1s/[[:space:]]*$//;1p')
+  case "$stat" in Z*) return 1 ;; esac
   kill -0 "$pid" 2>/dev/null && return 0
+  [ -n "$stat" ] && return 0
   ps -p "$pid" -o pid= >/dev/null 2>&1
 }
 

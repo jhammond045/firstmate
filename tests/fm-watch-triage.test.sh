@@ -39,6 +39,31 @@ ack_stopped_cycle() {  # <state>
     --recovery-generation "$generation"
 }
 
+install_fake_zombie_ps() {  # <fakebin> <real-ps>
+  cat > "$1/ps" <<'SH'
+#!/usr/bin/env bash
+set -u
+args=("$@")
+pid=
+want_stat=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -p) shift; pid=${1:-} ;;
+    -o) shift; [ "${1:-}" = "stat=" ] && want_stat=1 ;;
+  esac
+  shift || break
+done
+if [ "$want_stat" = 1 ] && [ -n "${FM_FAKE_ZOMBIE_PID:-}" ] && [ "$pid" = "$FM_FAKE_ZOMBIE_PID" ]; then
+  printf 'Z\n'
+  exit 0
+fi
+exec "$FM_REAL_PS" "${args[@]}"
+SH
+  chmod +x "$1/ps"
+  FM_REAL_PS=$2
+  export FM_REAL_PS
+}
+
 # Common watcher knobs: tight poll/grace, no check or heartbeat cadence unless a
 # test overrides them, so a test only exercises the path it targets. FM_CREW_STATE_BIN
 # points at the case's hermetic fake fm-crew-state.sh (installed by make_case) so the
@@ -448,7 +473,7 @@ test_crew_worktree_written_since_classifier() {
 # other branch's run as informational display, and another crew's live agent must
 # never hold off this crew's escalation. active_step_toon lives in wake-helpers.sh.
 test_crew_pipeline_agent_live_classifier() {
-  local dir state fakebin wt live dead home branch head stale unfetched
+  local dir state fakebin wt live dead home branch head stale unfetched real_ps
   dir=$(make_case pipeline-agent-live); state="$dir/state"; fakebin="$dir/fakebin"
   wt="$dir/wt"; home="$dir/mate-home"
   branch=fm/agent-live
@@ -474,6 +499,13 @@ test_crew_pipeline_agent_live_classifier() {
   FM_FAKE_AXI_STATUS="$(active_step_toon running "$dead" "$branch" "$head")"
   PATH="$fakebin:$PATH" crew_pipeline_agent_live a "$state" \
     && fail "a running step with a dead pid was treated as live"
+  real_ps=$(command -v ps)
+  install_fake_zombie_ps "$fakebin" "$real_ps"
+  FM_FAKE_ZOMBIE_PID=$live FM_REAL_PS=$real_ps \
+    FM_FAKE_AXI_STATUS="$(active_step_toon running "$live" "$branch" "$head")" \
+    PATH="$fakebin:$PATH" crew_pipeline_agent_live a "$state" \
+    && fail "a running step with a zombie pid was treated as live"
+  rm -f "$fakebin/ps"
   FM_FAKE_AXI_STATUS="$(active_step_toon completed "$live" "$branch" "$head")"
   PATH="$fakebin:$PATH" crew_pipeline_agent_live a "$state" \
     && fail "a completed step with a live pid was treated as pipeline liveness"
@@ -2050,7 +2082,7 @@ test_wedge_escalation_deferred_while_worktree_is_written() {
 # worktree probe cannot save it. A live pipeline agent must defer the same way;
 # a dead agent must still escalate on the unchanged schedule.
 test_wedge_escalation_deferred_while_pipeline_agent_live() {
-  local dir state fakebin out drain_out capture_file window key pane_hash sig pid wt back live dead branch head
+  local dir state fakebin out drain_out capture_file window key pane_hash sig pid wt back live dead branch head zombie real_ps
   dir=$(make_case wedge-pipeline-agent); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; drain_out="$dir/drain.out"; capture_file="$dir/pane.txt"
   window="test:fm-agent"; wt="$dir/wt"; branch=fm/wedge-agent
@@ -2112,8 +2144,35 @@ test_wedge_escalation_deferred_while_pipeline_agent_live() {
   [ ! -e "$state/.agent-since-$key" ] || fail "the agent-deferral chain outlived a real escalation"
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the dead-agent escalation failed"
   grep "$(printf '\tstale\t')" "$drain_out" | grep -F "$window" >/dev/null || fail "the dead-agent escalation was not queued"
+
+  sleep 60 &
+  zombie=$!
+  kill -0 "$zombie" 2>/dev/null || fail "zombie fixture pid did not start"
+  real_ps=$(command -v ps)
+  install_fake_zombie_ps "$fakebin" "$real_ps"
+  FM_FAKE_AXI_STATUS="$(active_step_toon fixing "$zombie" "$branch" "$head")"
+  export FM_FAKE_AXI_STATUS
+  echo "$back" > "$state/.stale-since-$key"
+  set_mtime "$back" "$state/.stale-since-$key"
+  rm -f "$state/.agent-since-$key" "$state/.agent-resurfaced-$key" "$state/.wedge-escalations-$key"
+  : > "$out"
+  FM_FAKE_ZOMBIE_PID=$zombie PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=240 \
+    FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_for_exit "$pid" 100; then
+    kill "$zombie" 2>/dev/null || true
+    fail "a quiet pane whose pipeline agent pid was zombie did not wedge-escalate on the existing schedule"
+  fi
+  kill "$zombie" 2>/dev/null || true
+  wait "$zombie" 2>/dev/null || true
+  grep -F "stale: $window" "$out" >/dev/null || fail "the zombie-agent escalation did not print a stale wake"
+  grep -F "possible wedge" "$out" >/dev/null || fail "the zombie-agent escalation did not flag a possible wedge"
+  [ "$(cat "$state/.wedge-escalations-$key" 2>/dev/null || true)" = 1 ] || fail "the zombie-agent escalation was not counted"
+  [ ! -e "$state/.agent-since-$key" ] || fail "the zombie-agent probe recorded an agent-deferral chain marker"
   unset FM_FAKE_AXI_STATUS
-  pass "a quiet pane with a live pipeline agent is deferred, while a dead agent still wedge-escalates on the unchanged schedule"
+  pass "a quiet pane with a live pipeline agent is deferred, while dead or zombie agents still wedge-escalate on the unchanged schedule"
 }
 
 # The other half of #3087's guardrail, at the caller: bare `axi status` answers
