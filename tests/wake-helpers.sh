@@ -106,6 +106,36 @@ SH
   chmod +x "$1/no-mistakes"
 }
 
+# A real git worktree on a real branch, so the pipeline-agent probe's branch +
+# code-identity attribution has something to bind to. Echoes nothing; callers
+# read the head back with git rev-parse.
+make_crew_repo() {  # <dir> <branch>
+  local dir=$1 branch=$2
+  mkdir -p "$dir"
+  git -C "$dir" init -q
+  git -C "$dir" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
+    commit -q --allow-empty -m init
+  git -C "$dir" checkout -q -b "$branch"
+}
+
+# One active_steps row in the shape `axi status` emits, including the run branch
+# and head the attribution gate reads. The last_activity column deliberately
+# carries the same "pid=N" prose the real CLI logs, so a fixture with an empty
+# agent_pid column still offers a pid to anything that scavenges free text.
+active_step_toon() {  # <step-status> <pid> <branch> <head> [agent_pid-column]
+  local pid_col=${5-}
+  [ "$#" -ge 5 ] || pid_col="\"$2\""
+  cat <<EOF
+run:
+  id: "01RUN"
+  branch: $3
+  head: "$4"
+  status: running
+  active_steps[1]{step,status,active_for,last_activity,agent_pid,round}:
+    review,$1,1s,"1s ago: log: agent started pid=$2",$pid_col,fix 1
+EOF
+}
+
 # Install a hermetic fake fm-crew-state.sh into <fakebin> and echo its path. The
 # watcher's absorb-only-when-provably-working triage calls this (via
 # FM_CREW_STATE_BIN) to read a crew's current state on no-verb signal and stale

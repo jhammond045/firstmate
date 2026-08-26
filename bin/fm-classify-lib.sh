@@ -1414,10 +1414,18 @@ FM_PIPELINE_AGENT_TIMEOUT=${FM_PIPELINE_AGENT_TIMEOUT:-10}
 # its worktree, so those three inputs all look idle while the pipeline agent is
 # demonstrably alive (GitHub #3087).
 #
+# The run has to be THIS crew's own. Bare `axi status` falls back to another
+# branch's run as informational display when this branch has no run, so the
+# captured output is put through fm_nm_run_is_current_for_worktree - the same
+# branch + code-identity gate fm-crew-state.sh reads current state behind -
+# before any pid is believed. Without it another crew's live pipeline agent
+# would silently hold off this crew's wedge escalation forever.
+#
 # 1 for every other outcome, including no worktree, a secondmate home, a missing
-# or failed axi-status read, a step that is not running/fixing, and a dead pid.
-# Absence of evidence leaves the caller's existing escalation schedule untouched,
-# so a genuinely wedged worker with a dead agent still escalates exactly as before.
+# or failed axi-status read, a run that does not attribute to this worktree, a
+# step that is not running/fixing, and a dead pid. Absence of evidence leaves the
+# caller's existing escalation schedule untouched, so a genuinely wedged worker
+# with a dead agent still escalates exactly as before.
 #
 # Callers must reach this only when they are otherwise about to escalate, never
 # on every poll: it is one bounded no-mistakes call. Do not query the pipeline
@@ -1426,7 +1434,8 @@ crew_pipeline_agent_live() {  # <id> <state>
   local id=$1 state=$2 wt kind out bound nounset
   [ -n "$id" ] || return 1
   [ -n "$state" ] || return 1
-  if ! declare -F fm_nm_run >/dev/null 2>&1 || ! declare -F fm_nm_active_agent_live >/dev/null 2>&1; then
+  if ! declare -F fm_nm_run >/dev/null 2>&1 || ! declare -F fm_nm_active_agent_live >/dev/null 2>&1 \
+    || ! declare -F fm_nm_run_is_current_for_worktree >/dev/null 2>&1; then
     case $- in *u*) nounset=on ;; *) nounset=off ;; esac
     # shellcheck source=bin/fm-nm-run-lib.sh
     # shellcheck disable=SC1091
@@ -1443,6 +1452,7 @@ crew_pipeline_agent_live() {  # <id> <state>
   bound=$FM_PIPELINE_AGENT_TIMEOUT
   case "$bound" in ''|*[!0-9]*|0) bound=10 ;; esac
   out=$(fm_nm_run "$wt" "$bound" axi status)
+  fm_nm_run_is_current_for_worktree "$wt" "$out" || return 1
   fm_nm_active_agent_live "$out"
 }
 

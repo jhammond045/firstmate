@@ -3,10 +3,12 @@
 #
 # ONE owner for the branch+code-identity matching rule that decides whether a
 # no-mistakes run belongs to a given worktree, used by fm-crew-state.sh
-# (read-only current-state reporting) and fm-teardown.sh (pre-teardown run
-# abort, see its "Fix 1" header comment). Getting this wrong in either
-# direction is unsafe: a false negative hides a genuinely parked run, and a
-# false positive lets teardown act on a run it does not own.
+# (read-only current-state reporting), fm-classify-lib.sh (the wedge detector's
+# pipeline-agent liveness probe) and fm-teardown.sh (pre-teardown run abort, see
+# its "Fix 1" header comment). Getting this wrong in either direction is unsafe:
+# a false negative hides a genuinely parked run, and a false positive lets
+# teardown act on a run it does not own, or lets another crew's live agent hold
+# off this crew's wedge escalation.
 #
 # Also owns the axi-status active_steps + live agent_pid probe the watcher and
 # AFK daemon use to tell a quiet validation poll from a wedged pane (#3087).
@@ -96,6 +98,25 @@ fm_nm_head_matches_or_unfetched() {  # <worktree> <run_head>
   fm_nm_head_unresolvable "$1" "$2"
 }
 
+# 0 when captured axi-status TOON $2 describes a run that is worktree $1's own
+# CURRENT state. Bare `axi status` answers for this branch when a run exists and
+# otherwise falls back to some other branch's run purely as informational
+# display, so every current-state consumer has to attribute the answer before
+# believing it. Both halves are required: the run's branch must equal the
+# worktree's checked-out branch (a detached HEAD has no branch to bind to and
+# rejects), and the run head must bind under fm_nm_head_matches_or_unfetched, so
+# a rewritten or diverged tip rejects while a pipeline-owned unfetched tip binds.
+# Teardown abort keeps its own gate on the strict head matcher.
+fm_nm_run_is_current_for_worktree() {  # <worktree> <toon-output>
+  local wt=$1 toon=$2 wt_branch run_branch
+  [ -n "$toon" ] || return 1
+  wt_branch=$(git -C "$wt" symbolic-ref --quiet --short HEAD 2>/dev/null || true)
+  [ -n "$wt_branch" ] || return 1
+  run_branch=$(fm_nm_strip_quotes "$(fm_nm_field "$toon" branch)")
+  [ -n "$run_branch" ] && [ "$run_branch" = "$wt_branch" ] || return 1
+  fm_nm_head_matches_or_unfetched "$wt" "$(fm_nm_strip_quotes "$(fm_nm_field "$toon" head)")"
+}
+
 # Quote-aware CSV field $2 (1-based) from row $1. Used to read axi-status
 # active_steps rows, whose last_activity field is quoted and may contain commas.
 fm_nm_csv_field() {  # <row> <1-based-n>
@@ -141,8 +162,14 @@ fm_nm_pid_is_live() {  # <pid>
 
 # 0 if captured axi-status TOON $1 shows an active_steps row whose status is
 # running or fixing and whose agent_pid names a live process. 1 for every other
-# outcome: no table, no pid, a dead pid, a non-active status. Absence of
-# evidence is a negative so callers keep their existing escalation schedule.
+# outcome: no table, an empty agent_pid, a dead pid, a non-active status.
+# Absence of evidence is a negative so callers keep their existing escalation
+# schedule; a pid is only ever read from the agent_pid column, never recovered
+# from the free-text last_activity log line, which names whichever agent last
+# wrote and may be a prior round's or a since-recycled process. Any sibling TOON
+# table header ends the active_steps table, so its rows are never re-parsed with
+# active_steps' column positions. Attribution is the caller's job: pass output
+# that fm_nm_run_is_current_for_worktree has already accepted.
 # This is the public CLI equivalent of the pipeline's step_results agent_pid
 # row: do not read the sqlite file from here.
 fm_nm_active_agent_live() {  # <toon-output>
@@ -174,6 +201,7 @@ fm_nm_active_agent_live() {  # <toon-output>
     esac
     [ "$in_table" = 1 ] || continue
     case "$line" in
+      *'['*'{'*'}:'*) in_table=0; continue ;;
       *,*) ;;
       *:*) in_table=0; continue ;;
     esac
@@ -182,17 +210,7 @@ fm_nm_active_agent_live() {  # <toon-output>
     status=$(fm_nm_strip_quotes "$(fm_nm_csv_field "$line" "$status_idx")")
     pid=$(fm_nm_strip_quotes "$(fm_nm_csv_field "$line" "$pid_idx")")
     case "$status" in
-      running|fixing)
-        if [ -z "$pid" ]; then
-          case "$line" in
-            *'pid='*)
-              pid=${line##*pid=}
-              pid=${pid%%[!0-9]*}
-              ;;
-          esac
-        fi
-        fm_nm_pid_is_live "$pid" && return 0
-        ;;
+      running|fixing) fm_nm_pid_is_live "$pid" && return 0 ;;
     esac
   done <<< "$toon"
   return 1

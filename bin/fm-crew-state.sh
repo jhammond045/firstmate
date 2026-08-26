@@ -419,20 +419,11 @@ nm_runs_status_for_branch() {  # <branch>
 # scratch worktree); with no branch there is no run to attribute to this crew.
 CREW_BRANCH=$(git -C "$WT" symbolic-ref --quiet --short HEAD 2>/dev/null || true)
 
-# 0 if the active axi-status run's head field matches this worktree's code
-# identity, including an unfetched pipeline-owned tip. Branch match is a
-# precondition (caller). Rule owned by fm_nm_head_matches_or_unfetched in
-# bin/fm-nm-run-lib.sh. Teardown abort uses the strict matcher instead.
-nm_run_head_matches_worktree() {
-  local run_head
-  run_head=$(strip_quotes "$(nm_field head)")
-  fm_nm_head_matches_or_unfetched "$WT" "$run_head"
-}
-
-# Coarse runs-list rows are "<status> <branch> <short-sha> ...". 0 if the short
-# sha for this branch row matches under the same rules as
-# nm_run_head_matches_worktree (equal, local is ancestor of run tip, or the
-# sha is absent from this object store).
+# Coarse runs-list rows are "<status> <branch> <short-sha> ...". The walk has
+# already matched the branch, so only the code identity is left: 0 if the short
+# sha binds under the same rule fm_nm_run_is_current_for_worktree applies to the
+# axi-status head (equal, local is ancestor of run tip, or the sha is absent
+# from this object store as a pipeline-owned unfetched tip).
 nm_coarse_head_matches_worktree() {  # <short-sha>
   fm_nm_head_matches_or_unfetched "$WT" "$1"
 }
@@ -449,8 +440,7 @@ COARSE_STATUS=""
 if [ "$KIND" = ship ] && [ -n "$CREW_BRANCH" ] && command -v no-mistakes >/dev/null 2>&1; then
   RUN_OUT=$(nm_run axi status)
   if [ -n "$RUN_OUT" ]; then
-    run_branch=$(strip_quotes "$(nm_field branch)")
-    if [ -n "$run_branch" ] && [ "$run_branch" = "$CREW_BRANCH" ] && nm_run_head_matches_worktree; then
+    if fm_nm_run_is_current_for_worktree "$WT" "$RUN_OUT"; then
       HAVE_RUN=1
     else
       # The active-or-most-recent run is for another branch, or same branch with

@@ -1132,12 +1132,14 @@ test_afk_nonterminal_working_merged_keeps_wedge_aging() {
 # GitHub #3087 sibling: AFK housekeeping must not possible-wedge a quiet pane
 # whose pipeline agent is still live. A dead agent keeps the existing escalate.
 test_afk_live_pipeline_agent_does_not_wedge() {
-  local dir state key win pane fakebin wt live
+  local dir state key win pane fakebin wt live branch head
   dir=$(make_supercase afk-live-agent-nowedge)
   state="$dir/state"
   fakebin="$dir/fakebin"
   wt="$dir/wt"
-  mkdir -p "$wt"
+  branch=fm/afk-agent
+  make_crew_repo "$wt" "$branch"
+  head=$(git -C "$wt" rev-parse HEAD)
   win="sess:fm-agent-w1"
   pane="$dir/pane.txt"
   printf 'idle prompt $\n' > "$pane"
@@ -1148,14 +1150,7 @@ test_afk_live_pipeline_agent_does_not_wedge() {
   sleep 30 &
   live=$!
   kill -0 "$live" 2>/dev/null || fail "live fixture pid did not start"
-  FM_FAKE_AXI_STATUS="$(cat <<EOF
-run:
-  id: "01RUN"
-  status: running
-  active_steps[1]{step,status,active_for,last_activity,agent_pid,round}:
-    review,fixing,1s,"1s ago: log: agent started pid=$live","$live",fix 1
-EOF
-)"
+  FM_FAKE_AXI_STATUS="$(active_step_toon fixing "$live" "$branch" "$head")"
   export FM_FAKE_AXI_STATUS
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
     FM_STATE_OVERRIDE="$state" FM_STALE_ESCALATE_SECS=240 housekeeping "$state"
