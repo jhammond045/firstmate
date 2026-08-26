@@ -82,7 +82,28 @@ exit 1
 SH
   chmod +x "$fakebin/tmux"
   make_fake_crew_state "$fakebin" >/dev/null
+  install_nm_stub "$fakebin"
   printf '%s\n' "$dir"
+}
+
+# Hermetic no-mistakes stub so watcher/daemon tests never hit the real CLI
+# when a liveness probe asks `axi status`. Empty output is "no evidence".
+# Tests that need a live pipeline agent export FM_FAKE_AXI_STATUS.
+install_nm_stub() {  # <fakebin>
+  cat > "$1/no-mistakes" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "${1:-}" in
+  axi)
+    shift
+    case "${1:-}" in
+      status) printf '%s\n' "${FM_FAKE_AXI_STATUS:-}" ;;
+    esac
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$1/no-mistakes"
 }
 
 # Install a hermetic fake fm-crew-state.sh into <fakebin> and echo its path. The
@@ -215,6 +236,7 @@ esac
 exit 1
 SH
   chmod +x "$fakebin/tmux"
+  install_nm_stub "$fakebin"
   printf '%s\n' "$dir"
 }
 

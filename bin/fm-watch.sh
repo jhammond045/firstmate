@@ -40,6 +40,11 @@
 #                          the run step cannot show; that deferral still
 #                          re-surfaces once per PAUSE_RESURFACE_SECS, and a pane
 #                          that writes nothing keeps the unchanged schedule.
+#                          A quiet pane whose pipeline step is running or fixing
+#                          with a live agent pid is deferred the same way
+#                          (wedge_defer_live_agent): a validation poll writes
+#                          nothing, so the worktree probe cannot see it, but a
+#                          dead agent still escalates on the unchanged schedule.
 #                          A genuinely busy pane
 #                          (window_is_busy true) is exempt from the above, but
 #                          only up to BUSY_TURN_MAX_SECS with no completed turn
@@ -512,12 +517,33 @@ wedge_defer_writing() {  # <window> <since-file> <triage-label> <idle-age>
   triage_log "absorbed $label (worktree written since the idle window opened, idle ${age}s): $win"
 }
 
+# Defer ONE wedge escalation for a pane that went quiet while its pipeline step
+# is still running or fixing with a live agent pid (crew_pipeline_agent_live in
+# fm-classify-lib.sh). Same shape as wedge_defer_writing: restart the idle
+# timer, age the chain on .agent-since-<key>, re-surface once per
+# PAUSE_RESURFACE_SECS, and leave the escalation counter untouched. A dead
+# agent is a negative and keeps the unchanged wedge schedule.
+wedge_defer_live_agent() {  # <window> <since-file> <triage-label> <idle-age>
+  local win=$1 since_file=$2 label=$3 age=$4 key asf aage
+  key=$(window_key "$win")
+  asf="$STATE/.agent-since-$key"
+  [ -e "$asf" ] || date +%s > "$asf"
+  aage=$(age_of "$asf")
+  date +%s > "$since_file"
+  resurface_absorbed "$win" "$STATE/.agent-resurfaced-$key" "$aage" \
+    "stale: $win (idle ${age}s, pipeline agent live for ${aage}s, rechecked on a long cadence not a wedge; confirm the agent is still making progress)"
+  triage_log "absorbed $label (pipeline agent live, idle ${age}s): $win"
+}
+
 # Drop a window's write-deferral chain wherever its stale bookkeeping resets, so
 # the bounded re-surface cadence is measured from the CURRENT quiet stretch and a
 # long-finished one cannot make the next deferral resurface immediately.
+# Also drops the live-agent deferral chain: both are progress deferrals tied to
+# the same idle window.
 clear_write_tracking() {  # <window-key>
   local key=$1
-  rm -f "$STATE/.writing-since-$key" "$STATE/.writing-resurfaced-$key"
+  rm -f "$STATE/.writing-since-$key" "$STATE/.writing-resurfaced-$key" \
+    "$STATE/.agent-since-$key" "$STATE/.agent-resurfaced-$key"
 }
 
 # Repeat-poll wedge-timer bookkeeping for an already-classified stale hash
@@ -547,6 +573,10 @@ wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-
       if [ "$age" -ge "$STALE_ESCALATE_SECS" ]; then
         if crew_worktree_written_since "$task" "$STATE" "$since_file"; then
           wedge_defer_writing "$win" "$since_file" "$label" "$age"
+          return 0
+        fi
+        if crew_pipeline_agent_live "$task" "$STATE"; then
+          wedge_defer_live_agent "$win" "$since_file" "$label" "$age"
           return 0
         fi
         n=$(( $(cat "$escalation_file" 2>/dev/null || echo 0) + 1 ))

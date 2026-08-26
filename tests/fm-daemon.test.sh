@@ -1129,6 +1129,46 @@ test_afk_nonterminal_working_merged_keeps_wedge_aging() {
   pass "AFK nonterminal working:+merged keeps wedge aging and re-escalates at bound"
 }
 
+# GitHub #3087 sibling: AFK housekeeping must not possible-wedge a quiet pane
+# whose pipeline agent is still live. A dead agent keeps the existing escalate.
+test_afk_live_pipeline_agent_does_not_wedge() {
+  local dir state key win pane fakebin wt live
+  dir=$(make_supercase afk-live-agent-nowedge)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  wt="$dir/wt"
+  mkdir -p "$wt"
+  win="sess:fm-agent-w1"
+  pane="$dir/pane.txt"
+  printf 'idle prompt $\n' > "$pane"
+  printf 'working: validating\n' > "$state/agent-w1.status"
+  printf 'window=%s\nkind=ship\nworktree=%s\n' "$win" "$wt" > "$state/agent-w1.meta"
+  key=$(printf '%s' "agent-w1" | tr ':/.' '___')
+  echo $(( $(date +%s) - 500 )) > "$state/.subsuper-stale-$key"
+  sleep 30 &
+  live=$!
+  kill -0 "$live" 2>/dev/null || fail "live fixture pid did not start"
+  FM_FAKE_AXI_STATUS="$(cat <<EOF
+run:
+  id: "01RUN"
+  status: running
+  active_steps[1]{step,status,active_for,last_activity,agent_pid,round}:
+    review,fixing,1s,"1s ago: log: agent started pid=$live","$live",fix 1
+EOF
+)"
+  export FM_FAKE_AXI_STATUS
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_STATE_OVERRIDE="$state" FM_STALE_ESCALATE_SECS=240 housekeeping "$state"
+  [ ! -s "$state/.subsuper-escalations" ] \
+    || fail "AFK housekeeping possible-wedged a live pipeline agent: $(cat "$state/.subsuper-escalations")"
+  [ -e "$state/.subsuper-stale-$key" ] \
+    || fail "AFK housekeeping dropped the stale marker for a live pipeline agent"
+  kill "$live" 2>/dev/null || true
+  wait "$live" 2>/dev/null || true
+  unset FM_FAKE_AXI_STATUS
+  pass "AFK housekeeping does not possible-wedge a quiet pane with a live pipeline agent"
+}
+
 test_afk_genuine_done_still_terminal_stale() {
   local dir state out
   dir=$(make_supercase afk-genuine-done-stale)
@@ -1980,6 +2020,7 @@ test_pane_input_pending_preserves_bright_placeholder_like_draft
 test_classify_signal_dedup_against_scan
 test_classify_stale_dedup_against_signal
 test_afk_nonterminal_working_merged_keeps_wedge_aging
+test_afk_live_pipeline_agent_does_not_wedge
 test_afk_genuine_done_still_terminal_stale
 test_pane_input_pending_bordered_idle_not_pending
 test_pane_input_pending_bordered_with_text_is_pending

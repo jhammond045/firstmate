@@ -441,6 +441,66 @@ test_crew_worktree_written_since_classifier() {
   pass "crew_worktree_written_since: real writes are evidence; no worktree, no anchor, quiet trees, .git churn and a mate's own home are not"
 }
 
+# GitHub #3087: a running/fixing pipeline step with a live agent pid is liveness
+# even when the pane is quiet and the worktree is not being written. A dead pid,
+# a non-active step, a secondmate, or a missing worktree is not.
+active_step_toon() {  # <step-status> <pid>
+  cat <<EOF
+run:
+  id: "01RUN"
+  status: running
+  active_steps[1]{step,status,active_for,last_activity,agent_pid,round}:
+    review,$1,1s,"1s ago: log: agent started pid=$2","$2",fix 1
+EOF
+}
+
+test_crew_pipeline_agent_live_classifier() {
+  local dir state fakebin wt live dead home
+  dir=$(make_case pipeline-agent-live); state="$dir/state"; fakebin="$dir/fakebin"
+  wt="$dir/wt"; home="$dir/mate-home"
+  mkdir -p "$wt" "$home"
+  printf 'window=test:fm-a\nkind=ship\nworktree=%s\n' "$wt" > "$state/a.meta"
+  sleep 30 &
+  live=$!
+  kill -0 "$live" 2>/dev/null || fail "live fixture pid did not start"
+  sh -c 'exit 0' &
+  dead=$!
+  wait "$dead" 2>/dev/null || true
+
+  FM_FAKE_AXI_STATUS="$(active_step_toon fixing "$live")"
+  export FM_FAKE_AXI_STATUS
+  PATH="$fakebin:$PATH" crew_pipeline_agent_live a "$state" \
+    || fail "a fixing step with a live agent pid was not liveness"
+  FM_FAKE_AXI_STATUS="$(active_step_toon running "$live")"
+  PATH="$fakebin:$PATH" crew_pipeline_agent_live a "$state" \
+    || fail "a running step with a live agent pid was not liveness"
+
+  FM_FAKE_AXI_STATUS="$(active_step_toon running "$dead")"
+  PATH="$fakebin:$PATH" crew_pipeline_agent_live a "$state" \
+    && fail "a running step with a dead pid was treated as live"
+  FM_FAKE_AXI_STATUS="$(active_step_toon completed "$live")"
+  PATH="$fakebin:$PATH" crew_pipeline_agent_live a "$state" \
+    && fail "a completed step with a live pid was treated as pipeline liveness"
+  FM_FAKE_AXI_STATUS=""
+  PATH="$fakebin:$PATH" crew_pipeline_agent_live a "$state" \
+    && fail "empty axi status was treated as pipeline liveness"
+
+  printf 'window=test:fm-b\nkind=ship\n' > "$state/b.meta"
+  FM_FAKE_AXI_STATUS="$(active_step_toon running "$live")"
+  PATH="$fakebin:$PATH" crew_pipeline_agent_live b "$state" \
+    && fail "a task with no worktree reported pipeline-agent liveness"
+  printf 'window=test:fm-sm\nkind=secondmate\nworktree=%s\n' "$home" > "$state/sm.meta"
+  PATH="$fakebin:$PATH" crew_pipeline_agent_live sm "$state" \
+    && fail "a secondmate reported pipeline-agent liveness"
+  ! crew_pipeline_agent_live "" "$state" \
+    || fail "an empty id reported pipeline-agent liveness"
+
+  kill "$live" 2>/dev/null || true
+  wait "$live" 2>/dev/null || true
+  unset FM_FAKE_AXI_STATUS
+  pass "crew_pipeline_agent_live: running/fixing + live pid is evidence; dead pid, completed step, no worktree, and a mate are not"
+}
+
 # FM_WORKTREE_WRITE_PRUNE is a skip list, so clearing it skips nothing and is the
 # obvious way to widen the probe to the whole depth-bounded tree. An empty list must
 # therefore widen the walk rather than report no evidence at all, which would
@@ -1936,6 +1996,75 @@ test_wedge_escalation_deferred_while_worktree_is_written() {
   pass "a quiet pane writing its own worktree is deferred, while one writing nothing still wedge-escalates on the unchanged schedule"
 }
 
+# GitHub #3087: a quiet pane waiting on a validation poll writes nothing, so the
+# worktree probe cannot save it. A live pipeline agent must defer the same way;
+# a dead agent must still escalate on the unchanged schedule.
+test_wedge_escalation_deferred_while_pipeline_agent_live() {
+  local dir state fakebin out drain_out capture_file window key pane_hash sig pid wt back live dead
+  dir=$(make_case wedge-pipeline-agent); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"; capture_file="$dir/pane.txt"
+  window="test:fm-agent"; wt="$dir/wt"
+  mkdir -p "$wt"
+  printf 'idle building output' > "$capture_file"
+  printf 'window=%s\nkind=ship\nworktree=%s\n' "$window" "$wt" > "$state/agent.meta"
+  printf 'working: validating\n' > "$state/agent.status"
+  sig=$(seen_sig "$state/agent.status"); printf '%s' "$sig" > "$state/.seen-agent_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "idle building output")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  printf '%s' "$pane_hash" > "$state/.stale-$key"
+  back=$(( $(date +%s) - 500 ))
+  echo "$back" > "$state/.stale-since-$key"
+  set_mtime "$back" "$state/.stale-since-$key"
+
+  sleep 60 &
+  live=$!
+  kill -0 "$live" 2>/dev/null || fail "live fixture pid did not start"
+  FM_FAKE_AXI_STATUS="$(active_step_toon fixing "$live")"
+  export FM_FAKE_AXI_STATUS
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=240 \
+    FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_poll_cycle "$state" "$pid"; then
+    reap "$pid"; kill "$live" 2>/dev/null || true
+    fail "watcher wedge-escalated a quiet pane whose pipeline agent is live: $(cat "$out")"
+  fi
+  [ ! -s "$out" ] || { reap "$pid"; kill "$live" 2>/dev/null || true; fail "a live-agent deferral printed a wake reason: $(cat "$out")"; }
+  [ ! -s "$state/.wake-queue" ] || { reap "$pid"; kill "$live" 2>/dev/null || true; fail "a live-agent deferral enqueued a wake"; }
+  [ -e "$state/.agent-since-$key" ] || { reap "$pid"; kill "$live" 2>/dev/null || true; fail "the agent-deferral chain marker was not recorded"; }
+  [ ! -e "$state/.wedge-escalations-$key" ] || { reap "$pid"; kill "$live" 2>/dev/null || true; fail "a live-agent deferral advanced the wedge escalation counter"; }
+  reap "$pid"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the intentional live-agent watcher stop"
+  kill "$live" 2>/dev/null || true
+  wait "$live" 2>/dev/null || true
+
+  sh -c 'exit 0' &
+  dead=$!
+  wait "$dead" 2>/dev/null || true
+  FM_FAKE_AXI_STATUS="$(active_step_toon fixing "$dead")"
+  echo "$back" > "$state/.stale-since-$key"
+  set_mtime "$back" "$state/.stale-since-$key"
+  rm -f "$state/.agent-since-$key" "$state/.agent-resurfaced-$key"
+  : > "$out"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=240 \
+    FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 100 || fail "a quiet pane whose pipeline agent is dead did not wedge-escalate on the existing schedule"
+  grep -F "stale: $window" "$out" >/dev/null || fail "the dead-agent escalation did not print a stale wake"
+  grep -F "possible wedge" "$out" >/dev/null || fail "the dead-agent escalation did not flag a possible wedge"
+  [ "$(cat "$state/.wedge-escalations-$key" 2>/dev/null || true)" = 1 ] || fail "the dead-agent escalation was not counted"
+  [ ! -e "$state/.agent-since-$key" ] || fail "the agent-deferral chain outlived a real escalation"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the dead-agent escalation failed"
+  grep "$(printf '\tstale\t')" "$drain_out" | grep -F "$window" >/dev/null || fail "the dead-agent escalation was not queued"
+  unset FM_FAKE_AXI_STATUS
+  pass "a quiet pane with a live pipeline agent is deferred, while a dead agent still wedge-escalates on the unchanged schedule"
+}
+
 # A deferral is not silence. A worktree can churn without real progress (a
 # rewritten log, a build touching the same file), so the whole deferral chain ages
 # and re-surfaces once per PAUSE_RESURFACE_SECS - the same bounded cadence a
@@ -2621,6 +2750,7 @@ test_crew_is_provably_working_classifier
 test_status_is_paused_classifier
 test_crew_absorb_class_classifier
 test_crew_worktree_written_since_classifier
+test_crew_pipeline_agent_live_classifier
 test_empty_write_prune_widens_the_probe
 test_empty_write_prune_from_the_environment_widens_the_probe
 test_worktree_write_probe_is_wall_clock_bounded
@@ -2657,6 +2787,7 @@ test_nonterminal_paused_rechecks_authoritative_state
 test_paused_authoritative_working_preserves_wedge_timer
 test_nonterminal_stale_repairs_missing_or_corrupt_timer
 test_wedge_escalation_deferred_while_worktree_is_written
+test_wedge_escalation_deferred_while_pipeline_agent_live
 test_write_deferral_resurfaces_on_the_bounded_cadence
 test_secondmate_home_supervision_churn_is_not_write_evidence
 test_timer_repair_drops_a_finished_write_deferral_chain
