@@ -25,6 +25,13 @@ set -u
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
+# bin/fm-harness.sh tests verified env markers before ancestry, so an ambient
+# marker belonging to ANOTHER adapter decides every assertion below. COPILOT_CLI
+# is stripped for exactly that reason: it is checked above the CLAUDECODE arm, so
+# a runner that happens to export it would flip these verdicts to copilot and
+# report a false failure that has nothing to do with cursor.
+unset COPILOT_CLI
+
 # shellcheck source=bin/fm-cursor-lib.sh
 . "$ROOT/bin/fm-cursor-lib.sh"
 # shellcheck source=bin/fm-busy-lib.sh
