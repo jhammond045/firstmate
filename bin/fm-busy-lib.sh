@@ -47,11 +47,15 @@
 # Classification (fm_busy_classify): busy | idle | unknown | dead, always
 # with the producing source as the second token. Precedence:
 #   1. dead endpoint (fm_busy_classify_live only) -> dead endpoint-gone
-#   2. standalone Kimi before verification       -> unknown kimi-unverified
+#   2. the pre-record harness arms, which decide before any record is read:
+#      standalone Kimi before verification -> unknown kimi-unverified, Codex
+#      without a semantic source -> unknown codex-unverified, and the cursor
+#      transcript and copilot-events pull sources, which always fold their own
+#      log rather than falling through
 #   3. a valid, gen-matching, source-trusted record -> its state and source
 #   4. no record at all: herdr's native busy verdict is trusted as busy
 #      (generation state is sufficient for busy, not for idle), then the
-#      muse session-log and cursor transcript pull sources, then the Grok-only
+#      post-record muse session-log pull source, then the Grok-only
 #      temporary regex fallback classifies a grok task from its rendered tail,
 #      then unknown missing
 #   5. malformed, stale, or untrusted records -> unknown, never a fallback

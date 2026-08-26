@@ -1343,14 +1343,16 @@ secondmate_registry_value() {
   secondmate_registry_field "$DATA/secondmates.md" "$1" "$2"
 }
 
-# copilot ships as a single compiled executable named `copilot`, unlike cursor
-# (whose CLI is cursor-agent) and muse (whose launcher execs a versioned
-# binary), so the name really is the name. The absolute path is resolved for the
-# same reason every other adapter's is: the pane is created by a long-lived
-# backend daemon that does not inherit firstmate's PATH.
-resolve_copilot_binary() {
-  local candidate dir fallback
-  candidate=$(command -v copilot 2>/dev/null || true)
+# Shared executable lookup for the adapters whose CLI is a single command of a
+# fixed name. A relative PATH hit is resolved to an absolute path because the
+# pane is created by a long-lived backend daemon that does not inherit
+# firstmate's PATH. The optional second argument is a HOME-derived installer
+# fallback tried when PATH holds nothing; it is refused when HOME is unset, so
+# a caller must not pass a path derived from anything else. Callers own their
+# own not-found message, so this prints nothing on failure.
+resolve_adapter_binary() {  # <command> [home-derived fallback]
+  local cmd=$1 fallback=${2:-} candidate dir
+  candidate=$(command -v "$cmd" 2>/dev/null || true)
   if [ -n "$candidate" ] && [ -x "$candidate" ]; then
     case "$candidate" in
       /*) printf '%s\n' "$candidate"; return 0 ;;
@@ -1363,9 +1365,21 @@ resolve_copilot_binary() {
         ;;
     esac
   fi
-  fallback="${HOME:-}/.local/bin/copilot"
-  if [ -n "${HOME:-}" ] && [ -x "$fallback" ]; then
+  if [ -n "$fallback" ] && [ -n "${HOME:-}" ] && [ -x "$fallback" ]; then
     printf '%s\n' "$fallback"
+    return 0
+  fi
+  return 1
+}
+
+# copilot ships as a single compiled executable named `copilot`, unlike cursor
+# (whose CLI is cursor-agent) and muse (whose launcher execs a versioned
+# binary), so the name really is the name. The absolute path is resolved for the
+# same reason every other adapter's is: the pane is created by a long-lived
+# backend daemon that does not inherit firstmate's PATH.
+resolve_copilot_binary() {
+  local fallback="${HOME:-}/.local/bin/copilot"
+  if resolve_adapter_binary copilot "$fallback"; then
     return 0
   fi
   echo "error: copilot executable not found; searched PATH for 'copilot' and fallback '$fallback'" >&2
@@ -1397,23 +1411,8 @@ new_copilot_session_id() {
 }
 
 resolve_kimi_binary() {
-  local candidate dir fallback
-  candidate=$(command -v kimi 2>/dev/null || true)
-  if [ -n "$candidate" ] && [ -x "$candidate" ]; then
-    case "$candidate" in
-      /*) printf '%s\n' "$candidate"; return 0 ;;
-      *)
-        dir=$(cd "$(dirname "$candidate")" 2>/dev/null && pwd -P) || dir=
-        if [ -n "$dir" ]; then
-          printf '%s/%s\n' "$dir" "$(basename "$candidate")"
-          return 0
-        fi
-        ;;
-    esac
-  fi
-  fallback="${HOME:-}/.kimi-code/bin/kimi"
-  if [ -n "${HOME:-}" ] && [ -x "$fallback" ]; then
-    printf '%s\n' "$fallback"
+  local fallback="${HOME:-}/.kimi-code/bin/kimi"
+  if resolve_adapter_binary kimi "$fallback"; then
     return 0
   fi
   echo "error: kimi executable not found; searched PATH for 'kimi' and fallback '$fallback'" >&2
@@ -1421,19 +1420,8 @@ resolve_kimi_binary() {
 }
 
 resolve_muse_binary() {
-  local candidate dir
-  candidate=$(command -v muse 2>/dev/null || true)
-  if [ -n "$candidate" ] && [ -x "$candidate" ]; then
-    case "$candidate" in
-      /*) printf '%s\n' "$candidate"; return 0 ;;
-      *)
-        dir=$(cd "$(dirname "$candidate")" 2>/dev/null && pwd -P) || dir=
-        if [ -n "$dir" ]; then
-          printf '%s/%s\n' "$dir" "$(basename "$candidate")"
-          return 0
-        fi
-        ;;
-    esac
+  if resolve_adapter_binary muse; then
+    return 0
   fi
   echo "error: muse executable not found on PATH; install Muse Code or select a different verified harness" >&2
   return 1
