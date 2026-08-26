@@ -33,8 +33,12 @@
 #      branch whose head was rewritten or diverged must not be attributed.
 #      A run matches when its head equals the worktree HEAD, or the worktree HEAD
 #      is an ancestor of the run head (pipeline fix commits advanced the run on
-#      the same line of history). Local work that advanced past the run head, or
-#      diverged from it, invalidates attribution.
+#      the same line of history), or the run head is absent from this object
+#      store (the pipeline advanced the tip in another worktree while this
+#      checkout stayed at the submitted head). Local work that advanced past a
+#      resolvable run head, or diverged from it, invalidates attribution. A
+#      newer same-branch runs-list row that does not bind must stop the walk:
+#      an older row whose sha happens to match must not supply a stale verdict.
 #      The run-step is AUTHORITATIVE: running/fixing -> working, ci -> working,
 #      awaiting_approval/fix_review -> parked (with gate findings), terminal
 #      passed/checks-passed -> done, failed/cancelled -> failed. EXCEPT: while
@@ -398,12 +402,13 @@ nm_runs_status_for_branch() {  # <branch>
     rest=$(trim "$rest")
     sha=${rest%% *}
     if [ "$br" = "$branch" ]; then
-      # Same code-identity rule as axi status: skip a same-branch row whose
-      # short-sha does not match this worktree (rewritten or advanced tip).
-      if ! nm_coarse_head_matches_worktree "$sha"; then
-        continue
+      # Same code-identity rule as axi status, including an unfetched
+      # pipeline-owned tip. A newer same-branch row that does not bind must
+      # stop the walk: continuing would let an older matching sha (often a
+      # previous failed run at the submitted head) impersonate current state.
+      if nm_coarse_head_matches_worktree "$sha"; then
+        printf '%s' "$st"
       fi
-      printf '%s' "$st"
       return 0
     fi
   done <<< "$out"
@@ -415,19 +420,21 @@ nm_runs_status_for_branch() {  # <branch>
 CREW_BRANCH=$(git -C "$WT" symbolic-ref --quiet --short HEAD 2>/dev/null || true)
 
 # 0 if the active axi-status run's head field matches this worktree's code
-# identity. Branch match is a precondition (caller). Rule owned by
-# fm_nm_head_matches_worktree in bin/fm-nm-run-lib.sh.
+# identity, including an unfetched pipeline-owned tip. Branch match is a
+# precondition (caller). Rule owned by fm_nm_head_matches_or_unfetched in
+# bin/fm-nm-run-lib.sh. Teardown abort uses the strict matcher instead.
 nm_run_head_matches_worktree() {
   local run_head
   run_head=$(strip_quotes "$(nm_field head)")
-  fm_nm_head_matches_worktree "$WT" "$run_head"
+  fm_nm_head_matches_or_unfetched "$WT" "$run_head"
 }
 
 # Coarse runs-list rows are "<status> <branch> <short-sha> ...". 0 if the short
-# sha for this branch row matches the worktree head under the same rules as
-# nm_run_head_matches_worktree (equal, or local is ancestor of run tip).
+# sha for this branch row matches under the same rules as
+# nm_run_head_matches_worktree (equal, local is ancestor of run tip, or the
+# sha is absent from this object store).
 nm_coarse_head_matches_worktree() {  # <short-sha>
-  fm_nm_head_matches_worktree "$WT" "$1"
+  fm_nm_head_matches_or_unfetched "$WT" "$1"
 }
 
 HAVE_RUN=0

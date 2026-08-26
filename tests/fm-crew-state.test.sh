@@ -1408,6 +1408,63 @@ test_missing_run_head_falls_back_to_current_state() {
   pass "missing run head falls back instead of matching by branch"
 }
 
+# GitHub #3071: while branch_sync.state is pipeline_owned, the pipeline advances
+# the run head in another worktree, so this checkout cannot resolve the live
+# sha. The worktree stays at the previous failed run's head. Walking past the
+# live row to the older matching failed row reports a false terminal.
+UNFETCHED_PIPELINE_HEAD=8888888888888888888888888888888888888888
+
+test_pipeline_owned_unfetched_head_is_not_older_failed() {
+  reset_fakes
+  local d short out
+  d=$(new_case pipeline-owned-unfetched)
+  make_repo_on_branch "$d/wt" fm/feat-owned
+  short=$(git -C "$d/wt" rev-parse --short=7 HEAD)
+  git -C "$d/wt" rev-parse --verify "${UNFETCHED_PIPELINE_HEAD}^{commit}" >/dev/null 2>&1 \
+    && fail "fixture sha unexpectedly resolved in the worktree"
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/owned.meta" "window=fm:fm-owned" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_RUN_HEAD="$UNFETCHED_PIPELINE_HEAD"
+  FM_FAKE_AXI_STATUS="$(run_running fm/feat-owned)"
+  FM_FAKE_RUNS_LIST="$(cat <<EOF
+  running    fm/feat-owned ${UNFETCHED_PIPELINE_HEAD:0:7}  2026-08-26 00:22
+  failed     fm/feat-owned ${short}  2026-08-25 18:48
+EOF
+)"
+  out=$(run_crew_state "$d" owned)
+  assert_contains "$out" "state: working" "live pipeline-owned run stays working"
+  assert_contains "$out" "source: run-step" "live pipeline-owned run stays run-step sourced"
+  assert_not_contains "$out" "state: failed" "older matching failed row must not win"
+  assert_not_contains "$out" "run failed" "older failed run detail must not leak through"
+  pass "pipeline-owned unfetched head is not shadowed by an older failed run"
+}
+
+# Same defect via the coarse runs-list path: axi status is another branch's run,
+# so attribution walks no-mistakes runs. The newest same-branch row is running
+# at an unfetched sha; an older failed row matches the worktree. The live row
+# must win; falling through is the false 'failed' terminal.
+test_coarse_unfetched_live_row_does_not_fall_through_to_failed() {
+  reset_fakes
+  local d short out
+  d=$(new_case coarse-unfetched-live)
+  make_repo_on_branch "$d/wt" fm/feat-coarse-owned
+  short=$(git -C "$d/wt" rev-parse --short=7 HEAD)
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/coarseowned.meta" "window=fm:fm-coarseowned" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_AXI_STATUS="$(run_running fm/other-crew)"
+  FM_FAKE_RUNS_LIST="$(cat <<EOF
+  running    fm/other-crew aaaaaaa  2026-08-26 00:23
+  running    fm/feat-coarse-owned ${UNFETCHED_PIPELINE_HEAD:0:7}  2026-08-26 00:22
+  failed     fm/feat-coarse-owned ${short}  2026-08-25 18:48
+EOF
+)"
+  out=$(run_crew_state "$d" coarseowned)
+  assert_contains "$out" "state: working" "coarse live unfetched row stays working"
+  assert_contains "$out" "source: run-step" "coarse live unfetched row stays run-step sourced"
+  assert_not_contains "$out" "state: failed" "coarse walk must not fall through to an older matching failed row"
+  pass "coarse walk does not fall through an unfetched live row to an older failed match"
+}
+
 test_active_run_is_authoritative
 test_stale_needs_decision_superseded
 test_stale_blocked_superseded
@@ -1461,5 +1518,7 @@ test_historical_same_branch_rewritten_head_not_current
 test_active_run_descendant_fix_head_remains_current
 test_local_advanced_past_run_head_invalidates
 test_missing_run_head_falls_back_to_current_state
+test_pipeline_owned_unfetched_head_is_not_older_failed
+test_coarse_unfetched_live_row_does_not_fall_through_to_failed
 
 echo "all fm-crew-state tests passed"

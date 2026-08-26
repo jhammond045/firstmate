@@ -63,6 +63,8 @@ fm_nm_field() {  # <toon-output> <key>
 #     the same history advanced the run tip past local HEAD)
 #   - run head is a strict ancestor of worktree HEAD, or diverged: no match
 #     (local work advanced outside the run, or the branch tip was rewritten)
+#   - run head is not in this object store: no match here (see
+#     fm_nm_head_matches_or_unfetched for current-state reads)
 fm_nm_head_matches_worktree() {  # <worktree> <run_head>
   local wt=$1 run_head=$2 local_full run_full
   [ -n "$run_head" ] || return 1
@@ -71,3 +73,23 @@ fm_nm_head_matches_worktree() {  # <worktree> <run_head>
   [ "$run_full" = "$local_full" ] && return 0
   git -C "$wt" merge-base --is-ancestor "$local_full" "$run_full" 2>/dev/null
 }
+
+# 0 if run head $2 cannot be resolved as a commit in worktree $1. Empty heads
+# are missing identity, not an unfetched pipeline tip, and reject.
+fm_nm_head_unresolvable() {  # <worktree> <run_head>
+  local wt=$1 run_head=$2
+  [ -n "$run_head" ] || return 1
+  git -C "$wt" rev-parse --verify "${run_head}^{commit}" >/dev/null 2>&1 && return 1
+  return 0
+}
+
+# Current-state attribution: identity match, or the run tip is absent from this
+# object store because the pipeline advanced it in another worktree
+# (pipeline_owned). Resolvable but diverged or local-ahead heads still reject.
+# Teardown abort keeps fm_nm_head_matches_worktree so it never acts on a run
+# whose objects this worktree cannot name.
+fm_nm_head_matches_or_unfetched() {  # <worktree> <run_head>
+  fm_nm_head_matches_worktree "$1" "$2" && return 0
+  fm_nm_head_unresolvable "$1" "$2"
+}
+
