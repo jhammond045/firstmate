@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# .gitignore must ignore config/ as a directory, not by exact filename.
+# .gitignore must ignore config/ as a directory, not by exact filename, and
+# must ignore checkout-local Claude, Spotlight, language-server, and task
+# scratch so those files cannot block a fast-forward self-update.
 #
 # A name-by-name list silently stops ignoring any new or home-local file under
 # config/ (fm-gitignore-config-name-by-name): an unrecognized file there makes
@@ -62,6 +64,25 @@ test_scratchpad_prefix_ignores_no_tracked_path() {
   pass "no currently tracked path starts with scratchpad"
 }
 
+test_checkout_local_artifacts_are_ignored() {
+  local sample
+  for sample in .claude/settings.local.json .metadata_never_index .serena/cache tasks/local.done; do
+    git -C "$ROOT" check-ignore -q "$sample" \
+      || fail "git does not ignore $sample (checkout-local artifacts must stay untracked)"
+  done
+  git -C "$ROOT" check-ignore -q .claude/settings.json \
+    && fail "git unexpectedly ignores tracked .claude/settings.json"
+  pass "checkout-local Claude, Spotlight, language-server, and task scratch paths are gitignored"
+}
+
+test_checkout_local_ignores_no_tracked_path() {
+  local tracked
+  tracked=$(git -C "$ROOT" ls-files | grep -E '(^|/)(\.serena|\.metadata_never_index|tasks/|\.claude/settings\.local\.json)' || true)
+  [ -z "$tracked" ] \
+    || fail "a currently tracked path would be newly ignored: $tracked"
+  pass "no currently tracked path matches the checkout-local ignore rules"
+}
+
 test_scratchpad2_does_not_dirty_porcelain() {
   # Remote sync uses git status --porcelain. A scratchpad2/ directory must not
   # make a home look dirty once scratchpad* is gitignored.
@@ -86,4 +107,6 @@ test_config_dir_ignored_as_category
 test_unrelated_path_stays_visible
 test_scratchpad_prefix_is_ignored
 test_scratchpad_prefix_ignores_no_tracked_path
+test_checkout_local_artifacts_are_ignored
+test_checkout_local_ignores_no_tracked_path
 test_scratchpad2_does_not_dirty_porcelain
