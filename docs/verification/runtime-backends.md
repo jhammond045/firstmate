@@ -264,7 +264,7 @@ The CLI matrix was checked directly:
 | Literal send | `herdr pane send-text <pane> <text> --session <name>` | Left text unsubmitted until Enter. |
 | Keys | `herdr pane send-keys <pane> enter|escape|ctrl+c --session <name>` | Enter and Escape worked; Ctrl-C interrupted foreground work. |
 | Capture | `herdr pane read <pane> --source recent --lines N` | Small N could return empty below viewport height; a 200-line request plus local trim was stable. |
-| Native state | `herdr agent get <pane>` | Working and done transitions were visible on some harnesses; live Claude Code 2.1.236 on Herdr 0.8.0 kept `agent_status=idle` for an entire landed turn, including a multi-second tool call, so submit confirmation falls through to the shared composer verdict. Native `busy` remains positive activity evidence, while native `idle` cannot close a turn and the adapter's semantic lifecycle decides worker state. |
+| Native state | `herdr agent get <pane>` | Working and done transitions were visible on some harnesses; live Claude Code 2.1.236 on Herdr 0.8.0 kept `agent_status=idle` for an entire landed turn, including a multi-second tool call, so submit confirmation falls through to the shared composer verdict. Native `busy` remains positive activity evidence for worker state, while native `idle` cannot close a turn and the adapter's semantic lifecycle decides worker state; for a claude primary native `busy` is not sufficient on its own, see "Away-mode busy read on a claude primary" below. |
 | Restart | guarded named-session stop then start | Workspace, tab, pane, and labels persisted; the agent process and registration did not. |
 | Close | `herdr pane close <pane> --session <name>` | The exact one-pane task tab closed; closing a final tab could remove the workspace. |
 
@@ -288,6 +288,36 @@ Observed 2026-08-19:
 
 ```text
 ok - live Herdr submit confirm: Claude Code (2.1.236 (Claude Code)) on herdr 0.8.0 reports empty for a landed idle steer
+```
+
+### Away-mode busy read on a claude primary
+
+Measured 2026-09-02 against Herdr 0.8.2, Claude Code 2.1.258, and Herdr's auto-updating detection manifest `remote:.../agent-detection/remote/claude.toml 2026.08.31.1` on macOS aarch64.
+
+Herdr's top-priority `osc_title_working` rule (priority 1100) classifies a Claude pane working from the terminal title's spinner glyph alone, outranking that same pane's own `live_prompt_box` composer read (priority 950).
+Claude Code animates that glyph as a liveness pulse that is not gated on a running turn, so an idle pane can report native `busy` indefinitely.
+`pane_is_busy` in `bin/fm-supervise-daemon.sh` therefore requires the rendered-tail signature to corroborate a native `busy` verdict for a claude primary; every other harness still trusts native `busy` on its own.
+The portable regression in `tests/fm-daemon.test.sh` pins both branches.
+
+Two live reads confirmed the corrected verdict:
+
+```text
+ok - declared-idle claude pane default:w5:p1 never read busy across 8 samples
+evidence: target=default:w5:p1 samples=8 native_busy=0 claude=2.1.258 (Claude Code) herdr=herdr 0.8.2 manifest=remote:/Users/jhammond/.local/state/herdr/agent-detection/remote/claude.toml 2026.08.31.1
+```
+
+```text
+# a genuinely mid-turn claude pane, same versions
+native=busy
+pane_is_busy=BUSY
+✢ Fiddle-faddling… (8m 22s · ↓ 12.9k tokens)
+```
+
+Refresh after a Claude Code upgrade, a Herdr upgrade, or a detection-manifest refresh with an idle Claude pane on Herdr:
+
+```sh
+FM_AFK_CLAUDE_BUSY_LIVE_E2E=1 FM_AFK_CLAUDE_BUSY_LIVE_TARGET=<session>:<pane-id> \
+  tests/fm-afk-claude-busy-live-e2e.test.sh
 ```
 
 ### Prune and respawn
