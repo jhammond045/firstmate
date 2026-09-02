@@ -588,12 +588,19 @@ fm_daemon_primary_harness() {
   printf '%s' "$FM_DAEMON_PRIMARY_HARNESS"
 }
 
+# A native "busy" verdict is trusted on its own for every harness except claude.
+# Claude Code animates its terminal-title spinner glyph as a liveness pulse that
+# is not gated on a running turn, so a backend that reads the title (herdr's
+# osc_title_working rule outranks its own composer read) reports busy on an idle
+# Claude pane, which blocks away-mode delivery indefinitely. For claude the
+# native verdict must be corroborated by the same rendered-tail signature this
+# function already uses when native is not busy.
 pane_is_busy() {  # <target> [backend]
   local target=$1 backend=${2:-tmux} native tail40 harness
   harness=$(fm_daemon_primary_harness)
   native=$(fm_backend_busy_state "$backend" "$target" 2>/dev/null)
   case "$native" in
-    busy) return 0 ;;
+    busy) [ "$harness" = claude ] || return 0 ;;
   esac
   tail40=$(fm_backend_capture "$backend" "$target" 40 2>/dev/null) || return 1
   printf '%s' "$tail40" | grep -v '^[[:space:]]*$' | tail -12 \
