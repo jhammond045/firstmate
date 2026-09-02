@@ -1801,10 +1801,38 @@ test_pane_is_busy_herdr_native_busy_state() {
   (
     fm_backend_busy_state() { [ "$1" = herdr ] && [ "$2" = "default:w1:p2" ] || fail "unexpected busy_state args: $1 $2"; printf 'busy'; }
     fm_backend_capture() { fail "capture should not be consulted when busy_state is conclusive"; }
-    FM_STATE_OVERRIDE="$dir/state" FM_DAEMON_PRIMARY_HARNESS=claude pane_is_busy "default:w1:p2" herdr \
+    FM_STATE_OVERRIDE="$dir/state" FM_DAEMON_PRIMARY_HARNESS=opencode pane_is_busy "default:w1:p2" herdr \
       || fail "pane_is_busy should report busy from herdr's native busy_state"
   ) || fail "herdr native-busy pane_is_busy subshell failed"
-  pass "pane_is_busy: herdr native busy_state='busy' short-circuits without a capture fallback"
+  pass "pane_is_busy: a non-claude harness trusts herdr native busy_state='busy' without a capture fallback"
+}
+
+# Claude Code's terminal-title spinner is not gated on a running turn, so a
+# native busy verdict for a claude primary is only evidence, never proof. This
+# drives the two signals apart in both directions and asserts the divergence
+# itself, so neither case can pass vacuously on a shared verdict.
+test_pane_is_busy_claude_native_busy_needs_rendered_corroboration() {
+  local dir idle_tail busy_tail
+  dir=$(make_supercase primary-claude-native-busy)
+  idle_tail=$'\xe2\x9d\xaf \n'
+  busy_tail=$'  Ingesting… (12s \xc2\xb7 esc to interrupt)\n'
+
+  printf '%s' "$idle_tail" | fm_busy_lines_match claude \
+    && fail "test setup: the idle tail must not match claude's rendered busy signature"
+  printf '%s' "$busy_tail" | fm_busy_lines_match claude \
+    || fail "test setup: the busy tail must match claude's rendered busy signature"
+
+  (
+    fm_backend_busy_state() { printf 'busy'; }
+    fm_backend_capture() { printf '%s' "$idle_tail"; }
+    if FM_STATE_OVERRIDE="$dir/state" FM_DAEMON_PRIMARY_HARNESS=claude pane_is_busy "default:w1:p2" herdr; then
+      fail "a claude primary must not read busy from a native verdict the rendered tail contradicts"
+    fi
+    fm_backend_capture() { printf '%s' "$busy_tail"; }
+    FM_STATE_OVERRIDE="$dir/state" FM_DAEMON_PRIMARY_HARNESS=claude pane_is_busy "default:w1:p2" herdr \
+      || fail "a claude primary must still read busy when the rendered tail corroborates the native verdict"
+  ) || fail "claude native-busy corroboration subshell failed"
+  pass "pane_is_busy: a claude primary requires rendered corroboration of a native busy verdict"
 }
 
 test_primary_busy_guard_is_harness_scoped() {
@@ -2053,6 +2081,7 @@ test_fm_send_exits_nonzero_on_unproven_submit
 test_discover_supervisor_backend_precedence
 test_discover_supervisor_target_herdr
 test_pane_is_busy_herdr_native_busy_state
+test_pane_is_busy_claude_native_busy_needs_rendered_corroboration
 test_primary_busy_guard_is_harness_scoped
 test_pane_is_busy_defaults_to_tmux_when_backend_omitted
 test_pane_input_pending_herdr_dispatch
