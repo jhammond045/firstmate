@@ -28,7 +28,11 @@
 # The guard is narrow by design. It classifies ONE thing: the shape of the tool
 # name. It makes no judgment about whether the work should be delegated at all,
 # which is a reasoning boundary no tool-shape hook can enforce.
-# See docs/subagent-guard.md for the complete contract and validation record.
+# Peer-session tools are a deliberate exact-name carve-out: ListAgents and
+# SendMessage talk to an already-running Claude Code session and create no
+# work record, so they are outside this guard's purpose. AGENTS.md section 15
+# grants firstmate standing authority for both. See docs/subagent-guard.md for
+# the complete contract and validation record.
 #
 # Usage:
 #   <PreToolUse JSON on stdin> | bin/fm-subagent-pretool-check.sh
@@ -77,6 +81,13 @@ OBSERVE_ONLY_TOOLS='taskoutput taskstop taskget tasklist cronlist bashoutput kil
 # contract untrue. Both lists are exact-name, never substring, so neither can
 # widen by accident.
 PLAN_ONLY_TOOLS='taskcreate taskupdate'
+
+# Exact lowercase tool names that match a stem above but only talk to a peer
+# Claude Code session. Enumerating peers or sending one a message creates no
+# work record, so it is outside this guard's purpose. AGENTS.md section 15
+# grants firstmate standing authority for both. Exact-name only, never
+# substring, so SendMessageBatch and any other sendmessage-stem name stay denied.
+PEER_SESSION_TOOLS='listagents sendmessage'
 
 TOOL=""
 TOOL_SET=0
@@ -152,7 +163,7 @@ case "$TOOL" in
   mcp__*) exit 0 ;;
 esac
 
-for allowed in $OBSERVE_ONLY_TOOLS $PLAN_ONLY_TOOLS; do
+for allowed in $OBSERVE_ONLY_TOOLS $PLAN_ONLY_TOOLS $PEER_SESSION_TOOLS; do
   [ "$NORMALIZED" != "$allowed" ] || exit 0
 done
 
