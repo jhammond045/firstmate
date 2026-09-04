@@ -146,9 +146,9 @@ test_plan_only_exclusion_is_exact_name() {
 }
 
 test_guard_allows_peer_session_tools() {
-  # These match a delegation stem but only talk to an already-running peer
-  # Claude Code session. They create no work record, so they are outside the
-  # guard's purpose.
+  # These match a delegation stem but only address an already-running Claude
+  # Code session rather than starting one. docs/subagent-guard.md owns the
+  # carve-out's rationale and its bounds.
   local tool
   for tool in $PEER_SESSION_TOOLS; do
     expect_allow "peer-session tool" "$tool"
