@@ -61,11 +61,11 @@ Four exclusions keep the shape test from producing false positives.
   So it is not the "work, agent, schedule, or isolated workspace that firstmate would not know about" the guard exists to stop, and the stem match on `task` is a false positive rather than a policy.
   The cost of the false positive was concrete: the primary could not track its own plan, and the deny text told it to run `bin/fm-brief.sh` and `bin/fm-spawn.sh` to create a todo entry.
 - `PEER_SESSION_TOOLS`: the exact names `listagents` and `sendmessage` are allowed.
-  These enumerate or message an already-running peer Claude Code session and create no work record, so they are outside this guard's purpose.
-  `AGENTS.md` section 15 grants firstmate standing authority for both.
+  These address an already-running Claude Code session rather than starting one.
+  This guard classifies tool-name shape only, so it cannot tell a local peer session from a cloud or Remote Control target and is not the layer that bounds where a message goes; `AGENTS.md` section 15's own discipline bounds that use.
 
 The three named exclusion lists match the whole normalized name, never a substring, so none can widen by accident: `TaskCreateAgent`, `RemoteTaskCreate`, and `SendMessageBatch` stay denied.
-Folding the lists together would be the drift risk, because the observe-or-stop rationale is not true of a tool that writes, and the peer-session rationale is not true of `Agent` or any other sendmessage-stem name.
+Folding the lists together would be the drift risk, because the observe-or-stop rationale is not true of a tool that writes, and the peer-session rationale is not true of `Agent`, which the `agent` stem catches, nor of any sendmessage-stem name other than `SendMessage` itself.
 
 The shipped guard fires on every delegation-shaped name that reaches it, including future names that no deny list knows about yet.
 That future-name behavior is the reason the tracked matcher must match all tools and let the script filter.
@@ -115,7 +115,7 @@ In particular `TaskOutput`, `TaskStop`, `TaskGet`, `TaskList`, and `CronList` on
 The hook deliberately allows those five, so the shipped guard can never strand a runaway task with no way to inspect or end it, and it allows `TaskCreate` and `TaskUpdate` too, so it can never be the reason the primary cannot track its own plan.
 The two session-local todo tools and `SendMessage` are no longer recommended for local denial at all.
 The todo tools write only the harness's session-local todo list, which has no executor and spawns nothing, so removing them from the schema removes no delegation power.
-`SendMessage` talks to an already-running peer session and creates no work record; denying it there would reproduce at a stronger layer the exact false positive the shipped guard now avoids, and would make `AGENTS.md` section 15 unusable for anyone who adopts this list verbatim.
+`SendMessage` addresses an already-running session rather than starting one; denying it there would reproduce at a stronger layer the exact false positive the shipped guard now avoids, and would make `AGENTS.md` section 15 unusable for anyone who adopts this list verbatim.
 `ListAgents` was never on this list.
 Narrowing the list further, including the five observe-or-stop names, is the captain's call, and this local list is the only layer that can remove a todo tool from the primary's schema.
 
