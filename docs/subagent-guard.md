@@ -184,7 +184,7 @@ Applicability turns on one question: does the harness expose built-in delegation
 
 | Harness | Delegation surface | Status |
 | --- | --- | --- |
-| Claude | 16 known tools, listed above | Scoped guard wired and live-verified; untracked local deny list verified and recommended. |
+| Claude | 15 known tools, listed above | Scoped guard wired and live-verified; untracked local deny list verified and recommended. |
 | Codex | none | Not applicable, verified empirically below. Codex 0.144.1 exposes no subagent, sub-task, or delegated-agent tool, so there is nothing to remove or intercept. `.codex/hooks.json` is unchanged. |
 | Grok | present, exact tokens unconfirmed | Not wired pending live verification. See below. |
 | OpenCode | present, exact tokens unconfirmed | Not wired pending live verification. See below. |
@@ -298,8 +298,8 @@ This distinction matters when reading the next result: a tool absent from a plai
 
 ### Local deny-list hardening
 
-Run in a scratch firstmate-shaped project containing `AGENTS.md`, `state/`, a full copy of `bin/`, and a Claude settings file containing the local deny list exactly as recommended on that date, which was the 18-name form that still included `TaskCreate` and `TaskUpdate`.
-The result validates that local deny list rather than tracked repo state, and the recommendation above has since dropped those two session-local todo tools.
+Run in a scratch firstmate-shaped project containing `AGENTS.md`, `state/`, a full copy of `bin/`, and a Claude settings file containing the local deny list exactly as recommended on that date, which was the 18-name form that still included `TaskCreate`, `TaskUpdate`, and `SendMessage`.
+The result validates that local deny list rather than tracked repo state, and the recommendation above has since dropped all three of those names: the two session-local todo tools and `SendMessage`.
 Asking for deferred entries explicitly returned:
 
 ```text
