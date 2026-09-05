@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Behavior tests for the per-adapter semantic busy-state wiring that
-# bin/fm-spawn.sh installs under the contract owned by bin/fm-busy-lib.sh.
+# Behavior tests for the per-adapter harness wiring that bin/fm-spawn.sh
+# installs at launch: the semantic busy-state contract owned by
+# bin/fm-busy-lib.sh, plus the rest of the claude settings artifact written
+# alongside it.
 #
 # These tests run the REAL fm-spawn against a fake tmux pane and an isolated
 # git worktree, then drive the generated adapter artifact (the Pi extension,
@@ -269,6 +271,11 @@ test_claude_hooks_semantic_lifecycle() {
   for ev in UserPromptSubmit Stop StopFailure SessionEnd; do
     jq -e ".hooks[\"$ev\"]" "$settings" >/dev/null || fail "claude hook settings lack $ev"
   done
+  # Same artifact, second guarantee: without this key Claude Code injects its
+  # session attribution instruction, which outranks the brief and stamps a
+  # Co-Authored-By trailer and a session link onto every crewmate commit.
+  [ "$(jq -r '.includeCoAuthoredBy' "$settings")" = false ] \
+    || fail "claude spawn settings must set includeCoAuthoredBy false so commits carry no vendor attribution trailers"
 
   out=$(classify claude "$id" "$state")
   [ "$out" = "busy fm-spawn" ] || fail "seed after spawn must be 'busy fm-spawn', got '$out'"

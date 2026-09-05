@@ -202,6 +202,13 @@ Its broader dark-TRUECOLOR placeholder handling and dark-theme tradeoff are docu
 That styled capture is internal to the boolean detector only.
 `fm-peek` and every other human or LLM-facing capture path stays plain `tmux capture-pane` with no escape codes.
 
+**Commit attribution (verified 2026-09-05, Claude Code 2.1.261).**
+Claude Code injects a session-level instruction to end commit messages with a `Co-Authored-By: Claude <model>` trailer and a `Claude-Session:` link, and to end PR bodies with a generated-with line.
+That instruction is harness-owned session context, so it outranks a brief that forbids naming a model, and a brief alone will not stop it.
+`bin/fm-spawn.sh` therefore writes `includeCoAuthoredBy: false` into the same worktree `.claude/settings.local.json` that carries the busy-state hooks, which suppresses the instruction outright; do not reach for `--bare`, which would disable those hooks in the same pass.
+Every `claude*` crewmate and scout spawn gets this, relaunch included, but a secondmate spawn and firstmate's own primary session do not, because neither reaches that write.
+The A/B evidence and the refresh procedure are in `docs/verification/runtime-backends.md` "Claude Code commit attribution".
+
 **Primary-session guard fact (verified 2026-07-04, Claude Code 2.1.201; preserved 2026-07-08, Claude Code 2.1.204; Stop-owned auto-arm revalidated 2026-07-24, Claude Code 2.1.219).**
 This is separate from the per-task crewmate turn-end hook above (that one just `touch`es a marker file in a task's own `.claude/settings.local.json`).
 The firstmate PRIMARY's own `.claude/settings.json` registers two Stop hooks: `bin/fm-turnend-guard.sh --claude` and the Stop-owned auto-arm `bin/fm-claude-stop-autoarm.sh` (`asyncRewake: true`, `timeout: 28800`), and exiting the guard with status 2 plus stderr reliably forces the model to continue.

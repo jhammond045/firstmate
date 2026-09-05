@@ -973,6 +973,60 @@ Refresh this harness-dependent proof before accepting a cursor upgrade:
 FM_HARNESS_LIVENESS_DRIFT=1 bin/fm-test-run.sh tests/fm-harness-liveness-drift-live-e2e.test.sh
 ```
 
+## Claude Code commit attribution
+
+Claude Code injects a session-level attribution instruction that tells the agent to end commit messages with a `Co-Authored-By: Claude <model>` trailer and a `Claude-Session:` link, and to end PR bodies with a generated-with line.
+That instruction is delivered as harness-owned session context, so it outranks a crewmate brief that forbids naming a model.
+`includeCoAuthoredBy: false` in the worktree's own `.claude/settings.local.json` suppresses the whole instruction, which is why `bin/fm-spawn.sh` writes that key into the settings file it already installs for a claude crewmate.
+
+Verified 2026-09-05 with claude 2.1.261 (Claude Code) on macOS, in a throwaway git repo with no `includeCoAuthoredBy` key in the operator's `~/.claude/settings.json`.
+
+The discriminator is the presence of the instruction, not the presence of a trailer on a sample commit.
+A control run that asked the agent to commit with an exact message produced no trailer even while the instruction was present, because whether a model obeys an instruction on any one commit is probabilistic while the injection itself is deterministic.
+Each probe below therefore asks the agent to report the instruction, and each was run with the same prompt:
+
+```sh
+PROMPT='Do your instructions for this session contain any directive about what trailers to end git commit messages with (for example a Co-Authored-By line or a session link)? Answer only: PRESENT followed by the exact lines, or ABSENT.'
+
+# A - no key anywhere
+claude -p --dangerously-skip-permissions "$PROMPT"
+
+# B - the key passed inline
+claude -p --dangerously-skip-permissions --settings '{"includeCoAuthoredBy":false}' "$PROMPT"
+
+# C - the key in the project's own .claude/settings.local.json, the file fm-spawn writes
+printf '%s\n' '{"includeCoAuthoredBy":false,"hooks":{"Stop":[{"hooks":[{"type":"command","command":"true"}]}]}}' > .claude/settings.local.json
+claude -p --dangerously-skip-permissions "$PROMPT"
+
+# D - the same project file with the key explicitly true, to prove the key moved the verdict
+printf '%s\n' '{"includeCoAuthoredBy":true,"hooks":{"Stop":[{"hooks":[{"type":"command","command":"true"}]}]}}' > .claude/settings.local.json
+claude -p --dangerously-skip-permissions "$PROMPT"
+```
+
+Observed output:
+
+```text
+A: PRESENT
+   Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+   Also PR bodies end with:
+   🤖 Generated with [Claude Code](https://claude.com/claude-code)
+B: ABSENT
+C: ABSENT
+D: PRESENT
+   Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+   Also PR bodies (not commits) end with:
+   🤖 Generated with [Claude Code](https://claude.com/claude-code)
+```
+
+`--bare` also disables attribution, but it disables hooks in the same pass, so it cannot be used here: the same settings file carries the semantic busy-state hooks a crewmate pane depends on.
+
+Scope of this evidence: it covers the `claude*` crewmate and scout spawns that reach the settings write in `bin/fm-spawn.sh`, relaunch included, because a relaunch re-enters that write.
+Secondmate spawns skip it, since the enclosing block is the `KIND != secondmate` one that also arms busy state, and firstmate's own primary claude session is launched outside `fm-spawn.sh` entirely; both are firstmate instances rather than project workers, and neither is covered here.
+muse is a different vendor and injects no Claude Code attribution.
+
+The portable regression is the claude case in `tests/fm-busy-adapter-wiring.test.sh`, which runs the real `bin/fm-spawn.sh` and asserts the key in the artifact it writes.
+Refresh this record after a Claude Code upgrade by re-running probes A through D above.
+
 ## Pi supervision branch
 
 The supervision-branch extension (`.pi/extensions/fm-branch-supervision.ts`, [docs/pi-supervision-branch.md](../pi-supervision-branch.md)) builds its persistent second session through the Pi SDK surface: `createAgentSession` (including its `model`, `modelRuntime`, and `thinkingLevel` options), `DefaultResourceLoader` with `extensionFactories`, `SessionManager`, `createBashToolDefinition` with a `spawnHook`, `sendCustomMessage`, the `before_provider_request` hook, the command context's model registry for picker candidates, a fresh `ModelRuntime` for isolated-branch resolution, and Pi's own `getSupportedThinkingLevels`/`clampThinkingLevel` plus its `getThinkingLevel` and `thinking_level_select` extension surface for effort.
