@@ -30,6 +30,13 @@
 #   fm-captain-hold.sh verify <origin-id>
 #   fm-captain-hold.sh diverged
 #
+# A rejected invocation (an unrecognized flag, wrong argument count, or
+# unknown command) prints the Usage: block above plus one line naming the
+# rejected token, and exits 2 - distinct from fail()'s exit 1 for a runtime
+# refusal. `resolve`, `decline`, `repair`, and `id` are not commands here;
+# fm-decision-hold.sh, the retired compatibility shim below, still accepts
+# them.
+#
 # `hold` places an existing task under an active captain hold, or creates the
 # task first when no work item exists to hold (--title required to create; the
 # optional --origin records provenance in the new task's body and supplies the
@@ -159,9 +166,28 @@ usage() {
   ' "$0"
 }
 
+# The "Usage:" block only, for a rejected invocation. The full header this
+# script's comment carries ends on unrelated compatibility prose about
+# resolution records (the "already closed needs rewriting" closing line);
+# dumping that whole block on every bad flag or unknown command reads as a
+# verdict about task state instead of the CLI mistake it actually is.
+usage_synopsis() {
+  awk '
+    /^# Usage:/ { found=1; sub(/^# ?/, ""); print; next }
+    found && /^#   / { sub(/^# ?/, ""); print; next }
+    found { exit }
+  ' "$0"
+}
+
 fail() {
   printf 'fm-captain-hold: %s\n' "$*" >&2
   exit 1
+}
+
+usage_fail() {  # <message>
+  usage_synopsis >&2
+  printf 'fm-captain-hold: %s\n' "$*" >&2
+  exit 2
 }
 
 validate_slug() {  # <label> <value>
@@ -378,7 +404,7 @@ resolve_entry() {  # <origin-or-empty> <entry>; prints the resolved id or fails
 
 command_hold() {
   local id=${1:-} title='' reason='' repo='' origin='' until='' show state existing_title body='' hold_kind
-  [ "$#" -ge 1 ] || { usage >&2; exit 2; }
+  [ "$#" -ge 1 ] || usage_fail "hold requires a task id"
   shift
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -387,7 +413,7 @@ command_hold() {
       --repo) shift; repo=${1:-} ;;
       --origin) shift; origin=${1:-} ;;
       --until) shift; until=${1:-} ;;
-      *) usage >&2; exit 2 ;;
+      *) usage_fail "hold: unrecognized argument: $1" ;;
     esac
     shift
   done
@@ -477,13 +503,13 @@ close_answered() {  # <task-id> <release-0-or-1>
 
 command_answer() {
   local id=${1:-} decision_file='' release=0 show state hold_kind body outcome recorded_mode
-  [ "$#" -ge 1 ] || { usage >&2; exit 2; }
+  [ "$#" -ge 1 ] || usage_fail "answer requires a task id"
   shift
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --decision-file) shift; decision_file=${1:-} ;;
       --release) release=1 ;;
-      *) usage >&2; exit 2 ;;
+      *) usage_fail "answer: unrecognized argument: $1" ;;
     esac
     shift
   done
@@ -598,7 +624,7 @@ read_binding() {  # <source-id>
 
 command_bind() {
   local source=${1:-} origin=${2:-} dest tmp
-  [ "$#" -ge 1 ] && [ "$#" -le 2 ] || { usage >&2; exit 2; }
+  [ "$#" -ge 1 ] && [ "$#" -le 2 ] || usage_fail "bind requires a source id and an optional origin"
   validate_source_id "$source"
   if [ -z "$origin" ] || [ "$origin" = --any-origin ]; then
     origin=$BINDING_ANY
@@ -619,7 +645,7 @@ command_bind() {
 
 command_unbind() {
   local source=${1:-}
-  [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+  [ "$#" -eq 1 ] || usage_fail "unbind requires exactly a source id"
   validate_source_id "$source"
   rm -f -- "$(binding_path "$source")"
   printf 'unbound: %s\n' "$source"
@@ -627,7 +653,7 @@ command_unbind() {
 
 command_binding() {
   local source=${1:-} origin
-  [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+  [ "$#" -eq 1 ] || usage_fail "binding requires exactly a source id"
   validate_source_id "$source"
   origin=$(read_binding "$source") || exit 1
   [ -n "$origin" ] || return 1
@@ -662,9 +688,9 @@ command_answers() {
     case "$1" in
       --source) shift; source=${1:-} ;;
       --any-origin) origin=$BINDING_ANY ;;
-      --*) usage >&2; exit 2 ;;
+      --*) usage_fail "answers: unrecognized flag: $1" ;;
       *)
-        [ -z "$origin" ] || { usage >&2; exit 2; }
+        [ -z "$origin" ] || usage_fail "answers accepts at most one legacy-origin argument: $1"
         origin=$1
         ;;
     esac
@@ -768,7 +794,7 @@ command_answers() {
 
 command_complete() {
   local origin=${1:-} meta previous='' supplied='' keys='' entry key status_file open raw_open has_meta=0 transfer_rc
-  [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+  [ "$#" -ge 2 ] || usage_fail "complete requires an origin id and at least one entry (or --none)"
   validate_slug origin-id "$origin"
   shift
   meta="$STATE/$origin.meta"
@@ -841,7 +867,7 @@ EOF
 
 command_verify() {
   local origin=${1:-} meta reviewed keys entry key open
-  [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+  [ "$#" -eq 1 ] || usage_fail "verify requires exactly an origin id"
   validate_slug origin-id "$origin"
   meta="$STATE/$origin.meta"
   [ -f "$meta" ] || fail "origin metadata is absent: $meta"
@@ -937,7 +963,7 @@ list_has_line() {  # <newline-separated-list> <value>
 
 command_diverged() {
   local ids resolve f origin tokens id keys key show title
-  [ "$#" -eq 0 ] || { usage >&2; exit 2; }
+  [ "$#" -eq 0 ] || usage_fail "diverged takes no arguments"
   # Both records must belong to the SAME home or the comparison is meaningless:
   # tasks-axi reads $FM_HOME's backlog, so a state dir pointed somewhere else
   # would report one home's status logs against another home's tasks. Every
@@ -997,5 +1023,8 @@ case "${1:-}" in
   verify) shift; command_verify "$@" ;;
   diverged) shift; command_diverged "$@" ;;
   -h|--help) usage ;;
-  *) usage >&2; exit 2 ;;
+  resolve|decline|repair|id)
+    usage_fail "'$1' was retired with the decision/task-hold collapse; use 'answer' here, or run fm-decision-hold.sh (the compatibility shim), which still accepts '$1'" ;;
+  '') usage_fail "a command is required" ;;
+  *) usage_fail "unknown command: $1" ;;
 esac
