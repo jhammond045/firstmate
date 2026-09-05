@@ -20,7 +20,7 @@ It does not replace `secondmate-provisioning`, which owns project clones inside 
 ## Preconditions and registry
 
 Projects live flat under `projects/`, and `data/projects.md` is the private fleet registry.
-Use the registry format and parser contract owned by the header of `bin/fm-project-mode.sh`.
+Use the registry format and parser contract owned by the header of `bin/fm-project-mode.sh`: a markdown table (one row per project) is the canonical current form, with a legacy list-line format still accepted for unmigrated entries.
 Keep each registry description useful for identifying the project, but keep delivery posture, captain-private state, and detailed project knowledge in their existing designated homes.
 Do not turn the registry into project documentation.
 
