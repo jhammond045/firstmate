@@ -13,7 +13,7 @@
 # daemon keeps its escalation-digest seen-markers; the watcher keeps its .seen-*
 # signatures).
 #
-# There are three documented exceptions. The absorb classification
+# There are four documented exceptions. The absorb classification
 # (crew_absorb_class and its working/paused wrappers) is NOT a pure status-file
 # read: it reuses bin/fm-crew-state.sh, which may make a bounded no-mistakes call,
 # to decide whether a crew that just stopped its turn or went stale is working,
@@ -25,7 +25,8 @@
 # stays bounded by new appends instead of re-reading each task's whole lifetime
 # log every time. crew_worktree_written_since reads the task's meta file and walks
 # a bounded slice of its worktree instead of a status file, so callers run it only
-# at the moment they would otherwise escalate.
+# at the moment they would otherwise escalate. crew_pipeline_agent_live is the same
+# class: one bounded axi-status read plus a pid liveness check, only at that moment.
 
 # Directory of this library, used to locate the sibling fm-crew-state.sh reader.
 # Resolved at source time from BASH_SOURCE so it works whether sourced by a
@@ -1396,6 +1397,63 @@ crew_worktree_written_since() {  # <id> <state> <anchor-file>
       -type f -newer "$anchor" -print -quit 2>/dev/null || true)
   fi
   [ -n "$hit" ]
+}
+
+# Seconds allowed for the one axi-status read inside crew_pipeline_agent_live.
+# Same class as FM_WORKTREE_WRITE_TIMEOUT: the probe runs synchronously at the
+# moment an escalation would otherwise fire. A non-positive or non-numeric
+# value is not a bound, so the default applies.
+FM_PIPELINE_AGENT_TIMEOUT=${FM_PIPELINE_AGENT_TIMEOUT:-10}
+
+# 0 when task <id>'s attributed pipeline step is running or fixing and its
+# agent_pid names a live process: positive evidence the crew is still working
+# even though its rendered pane has gone quiet and its worktree is not being
+# written. This is the fourth liveness input the wedge detector has, after pane
+# quietness, the run step, and worktree writes. It exists because a crew waiting
+# on a multi-minute validation poll writes nothing to its pane and nothing to
+# its worktree, so those three inputs all look idle while the pipeline agent is
+# demonstrably alive (GitHub #3087).
+#
+# The run has to be THIS crew's own. Bare `axi status` falls back to another
+# branch's run as informational display when this branch has no run, so the
+# captured output is put through fm_nm_run_is_current_for_worktree - the same
+# branch + code-identity gate fm-crew-state.sh reads current state behind -
+# before any pid is believed. Without it another crew's live pipeline agent
+# would silently hold off this crew's wedge escalation forever.
+#
+# 1 for every other outcome, including no worktree, a secondmate home, a missing
+# or failed axi-status read, a run that does not attribute to this worktree, a
+# step that is not running/fixing, and a dead pid. Absence of evidence leaves the
+# caller's existing escalation schedule untouched, so a genuinely wedged worker
+# with a dead agent still escalates exactly as before.
+#
+# Callers must reach this only when they are otherwise about to escalate, never
+# on every poll: it is one bounded no-mistakes call. Do not query the pipeline
+# sqlite file from here; axi status is the public owner of step + agent_pid.
+crew_pipeline_agent_live() {  # <id> <state>
+  local id=$1 state=$2 wt kind out bound nounset
+  [ -n "$id" ] || return 1
+  [ -n "$state" ] || return 1
+  if ! declare -F fm_nm_run >/dev/null 2>&1 || ! declare -F fm_nm_active_agent_live >/dev/null 2>&1 \
+    || ! declare -F fm_nm_run_is_current_for_worktree >/dev/null 2>&1; then
+    case $- in *u*) nounset=on ;; *) nounset=off ;; esac
+    # shellcheck source=bin/fm-nm-run-lib.sh
+    # shellcheck disable=SC1091
+    . "$_FM_CLASSIFY_LIB_DIR/fm-nm-run-lib.sh"
+    [ "$nounset" = on ] || set +u
+  fi
+  wt=$(grep '^worktree=' "$state/$id.meta" 2>/dev/null | tail -1 | cut -d= -f2- || true)
+  [ -n "$wt" ] && [ -d "$wt" ] || return 1
+  kind=$(grep '^kind=' "$state/$id.meta" 2>/dev/null | tail -1 | cut -d= -f2- || true)
+  [ "$kind" != secondmate ] || return 1
+  if [ -e "$wt/.fm-secondmate-home" ] || [ -L "$wt/.fm-secondmate-home" ]; then
+    return 1
+  fi
+  bound=$FM_PIPELINE_AGENT_TIMEOUT
+  case "$bound" in ''|*[!0-9]*|0) bound=10 ;; esac
+  out=$(fm_nm_run "$wt" "$bound" axi status)
+  fm_nm_run_is_current_for_worktree "$wt" "$out" || return 1
+  fm_nm_active_agent_live "$out"
 }
 
 # 0 (benign/absorb) if EVERY task referenced by a no-verb "signal:" wake is provably

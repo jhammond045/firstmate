@@ -1129,6 +1129,41 @@ test_afk_nonterminal_working_merged_keeps_wedge_aging() {
   pass "AFK nonterminal working:+merged keeps wedge aging and re-escalates at bound"
 }
 
+# GitHub #3087 sibling: AFK housekeeping must not possible-wedge a quiet pane
+# whose pipeline agent is still live. A dead agent keeps the existing escalate.
+test_afk_live_pipeline_agent_does_not_wedge() {
+  local dir state key win pane fakebin wt live branch head
+  dir=$(make_supercase afk-live-agent-nowedge)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  wt="$dir/wt"
+  branch=fm/afk-agent
+  make_crew_repo "$wt" "$branch"
+  head=$(git -C "$wt" rev-parse HEAD)
+  win="sess:fm-agent-w1"
+  pane="$dir/pane.txt"
+  printf 'idle prompt $\n' > "$pane"
+  printf 'working: validating\n' > "$state/agent-w1.status"
+  printf 'window=%s\nkind=ship\nworktree=%s\n' "$win" "$wt" > "$state/agent-w1.meta"
+  key=$(printf '%s' "agent-w1" | tr ':/.' '___')
+  echo $(( $(date +%s) - 500 )) > "$state/.subsuper-stale-$key"
+  sleep 30 &
+  live=$!
+  kill -0 "$live" 2>/dev/null || fail "live fixture pid did not start"
+  FM_FAKE_AXI_STATUS="$(active_step_toon fixing "$live" "$branch" "$head")"
+  export FM_FAKE_AXI_STATUS
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_STATE_OVERRIDE="$state" FM_STALE_ESCALATE_SECS=240 housekeeping "$state"
+  [ ! -s "$state/.subsuper-escalations" ] \
+    || fail "AFK housekeeping possible-wedged a live pipeline agent: $(cat "$state/.subsuper-escalations")"
+  [ -e "$state/.subsuper-stale-$key" ] \
+    || fail "AFK housekeeping dropped the stale marker for a live pipeline agent"
+  kill "$live" 2>/dev/null || true
+  wait "$live" 2>/dev/null || true
+  unset FM_FAKE_AXI_STATUS
+  pass "AFK housekeeping does not possible-wedge a quiet pane with a live pipeline agent"
+}
+
 test_afk_genuine_done_still_terminal_stale() {
   local dir state out
   dir=$(make_supercase afk-genuine-done-stale)
@@ -1766,10 +1801,38 @@ test_pane_is_busy_herdr_native_busy_state() {
   (
     fm_backend_busy_state() { [ "$1" = herdr ] && [ "$2" = "default:w1:p2" ] || fail "unexpected busy_state args: $1 $2"; printf 'busy'; }
     fm_backend_capture() { fail "capture should not be consulted when busy_state is conclusive"; }
-    FM_STATE_OVERRIDE="$dir/state" FM_DAEMON_PRIMARY_HARNESS=claude pane_is_busy "default:w1:p2" herdr \
+    FM_STATE_OVERRIDE="$dir/state" FM_DAEMON_PRIMARY_HARNESS=opencode pane_is_busy "default:w1:p2" herdr \
       || fail "pane_is_busy should report busy from herdr's native busy_state"
   ) || fail "herdr native-busy pane_is_busy subshell failed"
-  pass "pane_is_busy: herdr native busy_state='busy' short-circuits without a capture fallback"
+  pass "pane_is_busy: a non-claude harness trusts herdr native busy_state='busy' without a capture fallback"
+}
+
+# Claude Code's terminal-title spinner is not gated on a running turn, so a
+# native busy verdict for a claude primary is only evidence, never proof. This
+# drives the two signals apart in both directions and asserts the divergence
+# itself, so neither case can pass vacuously on a shared verdict.
+test_pane_is_busy_claude_native_busy_needs_rendered_corroboration() {
+  local dir idle_tail busy_tail
+  dir=$(make_supercase primary-claude-native-busy)
+  idle_tail=$'\xe2\x9d\xaf \n'
+  busy_tail=$'  Ingesting… (12s \xc2\xb7 esc to interrupt)\n'
+
+  printf '%s' "$idle_tail" | fm_busy_lines_match claude \
+    && fail "test setup: the idle tail must not match claude's rendered busy signature"
+  printf '%s' "$busy_tail" | fm_busy_lines_match claude \
+    || fail "test setup: the busy tail must match claude's rendered busy signature"
+
+  (
+    fm_backend_busy_state() { printf 'busy'; }
+    fm_backend_capture() { printf '%s' "$idle_tail"; }
+    if FM_STATE_OVERRIDE="$dir/state" FM_DAEMON_PRIMARY_HARNESS=claude pane_is_busy "default:w1:p2" herdr; then
+      fail "a claude primary must not read busy from a native verdict the rendered tail contradicts"
+    fi
+    fm_backend_capture() { printf '%s' "$busy_tail"; }
+    FM_STATE_OVERRIDE="$dir/state" FM_DAEMON_PRIMARY_HARNESS=claude pane_is_busy "default:w1:p2" herdr \
+      || fail "a claude primary must still read busy when the rendered tail corroborates the native verdict"
+  ) || fail "claude native-busy corroboration subshell failed"
+  pass "pane_is_busy: a claude primary requires rendered corroboration of a native busy verdict"
 }
 
 test_primary_busy_guard_is_harness_scoped() {
@@ -1980,6 +2043,7 @@ test_pane_input_pending_preserves_bright_placeholder_like_draft
 test_classify_signal_dedup_against_scan
 test_classify_stale_dedup_against_signal
 test_afk_nonterminal_working_merged_keeps_wedge_aging
+test_afk_live_pipeline_agent_does_not_wedge
 test_afk_genuine_done_still_terminal_stale
 test_pane_input_pending_bordered_idle_not_pending
 test_pane_input_pending_bordered_with_text_is_pending
@@ -2017,6 +2081,7 @@ test_fm_send_exits_nonzero_on_unproven_submit
 test_discover_supervisor_backend_precedence
 test_discover_supervisor_target_herdr
 test_pane_is_busy_herdr_native_busy_state
+test_pane_is_busy_claude_native_busy_needs_rendered_corroboration
 test_primary_busy_guard_is_harness_scoped
 test_pane_is_busy_defaults_to_tmux_when_backend_omitted
 test_pane_input_pending_herdr_dispatch
