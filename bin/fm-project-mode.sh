@@ -11,10 +11,17 @@
 # bin/fm-home-seed.sh (refuse local-only seeding, run no-mistakes init), and
 # bin/fm-spawn.sh's advisory registry-deviation notice.
 #
-# Registry line format (data/projects.md):
+# Registry format (data/projects.md), canonical table form - one row per project:
+#   | project | path | mode | yolo | notes |
+#   |---|---|---|---|---|
+#   | <name> | <path> | <mode> | on|off | <notes> |
+#
+# Legacy list format, still accepted for unmigrated entries:
 #   - <name> - <desc> (added <date>)                  -> no-mistakes off  (legacy default)
 #   - <name> [<mode>] - <desc> (added <date>)          -> <mode> off
 #   - <name> [<mode> +yolo] - <desc> (added <date>)    -> <mode> on
+#
+# A file may freely mix both formats; each project's own row or line wins.
 #
 # Registered modes:
 #   no-mistakes            full pipeline -> PR -> configured merge authority (default)
@@ -57,6 +64,7 @@ fi
 
 # awk emits "<mode> <yolo>" (one line) or nothing if the project is absent.
 parsed=$(awk -v n="$NAME" '
+  function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
   $1=="-" && $2==n {
     mode="no-mistakes"; yolo="off";
     if ($3 ~ /^\[/) {
@@ -68,6 +76,15 @@ parsed=$(awk -v n="$NAME" '
       for (j=1; j<=k; j++) if (a[j]=="+yolo") yolo="on";
     }
     print mode, yolo; exit
+  }
+  /^[ \t]*\|/ {
+    line = $0;
+    sub(/^[ \t]*\|/, "", line);
+    sub(/\|[ \t]*$/, "", line);
+    ncols = split(line, cols, "|");
+    if (ncols >= 4 && trim(cols[1]) == n) {
+      print trim(cols[3]), trim(cols[4]); exit
+    }
   }
 ' "$REG")
 
