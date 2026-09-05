@@ -5,7 +5,9 @@
 # advanced after the worktree was allocated.
 # These tests drive the real spawn path with a fake terminal, then prove it
 # starts the worker from the fetched origin/main tip or stops when origin is
-# unreachable.
+# unreachable. A project with no origin remote at all (a local-only repo never
+# pushed anywhere) is covered separately: mode=local-only falls back to the
+# primary checkout's own local default branch, while direct-PR keeps refusing.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -63,6 +65,33 @@ make_case() {
   git -C "$publisher" add advanced-main.txt
   git -C "$publisher" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm advance-main
   git -C "$publisher" push --quiet origin "$default"
+
+  printf '%s\n' "$case_dir|$home|$project|$pool|$fakebin|$initial|$default"
+}
+
+make_case_no_origin() {
+  local name=$1 id=$2 default=${3:-main} case_dir home project pool fakebin initial
+  case_dir="$TMP_ROOT/$name"
+  home="$case_dir/home"
+  project="$case_dir/project"
+  pool="$case_dir/pool"
+  fakebin=$(make_spawn_fakebin "$case_dir/fake")
+
+  mkdir -p "$home/data/$id" "$home/projects" "$home/state" "$home/config"
+  printf 'codex\n' > "$home/config/crew-harness"
+  printf 'brief for %s\n' "$id" > "$home/data/$id/brief.md"
+  touch "$home/state/.last-watcher-beat"
+
+  git init --quiet -b "$default" "$project"
+  printf 'base\n' > "$project/README.md"
+  git -C "$project" add README.md
+  git -C "$project" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm initial
+  initial=$(git -C "$project" rev-parse HEAD)
+  git -C "$project" worktree add --quiet --detach "$pool" "$initial"
+
+  printf 'must survive a newly spawned branch\n' > "$project/advanced-local.txt"
+  git -C "$project" add advanced-local.txt
+  git -C "$project" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm advance-local
 
   printf '%s\n' "$case_dir|$home|$project|$pool|$fakebin|$initial|$default"
 }
@@ -227,11 +256,77 @@ test_unresolved_remote_default_refuses_pool() {
   pass "an unresolved remote default branch refuses the pooled worktree"
 }
 
+test_local_only_with_origin_still_refreshes_from_origin() {
+  local rec id out status current
+  id='pool-local-only-with-origin-r8'
+  rec=$(make_case local-only-with-origin "$id")
+  read_case_record "$rec"
+
+  out=$(run_spawn "$id" --mode local-only --yolo off)
+  status=$?
+  expect_code 0 "$status" "local-only spawn should still refresh from origin when origin is present"
+  current=$(git -C "$POOL_DIR" rev-parse origin/main)
+  [ "$(git -C "$POOL_DIR" rev-parse HEAD)" = "$current" ] \
+    || fail "local-only spawn with origin present did not start at current origin/main"
+  assert_grep 'must survive a newly spawned branch' "$POOL_DIR/advanced-main.txt" \
+    "local-only spawn with origin present omitted advanced-main content"
+  if [ "${FM_TEST_EVIDENCE:-0}" = 1 ]; then
+    printf '# observed local-only-with-origin refresh: %s\n' "$(printf '%s\n' "$out" | tail -n 1)"
+  fi
+  pass "a local-only spawn on a project with an origin remote still refreshes from origin, unchanged"
+}
+
+test_no_origin_local_only_refreshes_from_primary_local_default() {
+  local rec id out status current branch_head
+  id='pool-no-origin-local-only-r6'
+  rec=$(make_case_no_origin no-origin-local-only "$id")
+  read_case_record "$rec"
+
+  out=$(run_spawn "$id" --mode local-only --yolo off)
+  status=$?
+  expect_code 0 "$status" "local-only spawn should refresh from the primary's local default branch when origin is absent"
+  current=$(git -C "$PROJECT_DIR" rev-parse "$DEFAULT_BRANCH")
+  branch_head=$(git -C "$POOL_DIR" rev-parse HEAD)
+  [ "$branch_head" = "$current" ] \
+    || fail "spawn did not refresh the pooled worktree to the primary's local default branch"
+  [ "$branch_head" != "$INITIAL_SHA" ] \
+    || fail "fixture did not prove the primary checkout advanced past the pool base"
+  assert_grep 'must survive a newly spawned branch' "$POOL_DIR/advanced-local.txt" \
+    "spawn omitted the primary checkout's locally-advanced content"
+  if [ "${FM_TEST_EVIDENCE:-0}" = 1 ]; then
+    printf '# observed no-origin local-only refresh: %s\n' "$(printf '%s\n' "$out" | tail -n 1)"
+  fi
+  pass "a local-only spawn on a project with no origin remote refreshes from the primary checkout's local default branch"
+}
+
+test_no_origin_direct_pr_still_refuses() {
+  local rec id out status before
+  id='pool-no-origin-direct-pr-r7'
+  rec=$(make_case_no_origin no-origin-direct-pr "$id")
+  read_case_record "$rec"
+  before=$(git -C "$POOL_DIR" rev-parse HEAD)
+
+  out=$(run_spawn "$id" --mode direct-PR --yolo off)
+  status=$?
+  [ "$status" -ne 0 ] || fail "direct-PR spawn succeeded despite no origin remote"
+  assert_contains "$out" "could not fetch origin" \
+    "direct-PR spawn did not refuse with the existing no-origin message"
+  [ "$(git -C "$POOL_DIR" rev-parse HEAD)" = "$before" ] \
+    || fail "spawn changed the pooled worktree despite refusing with no origin"
+  if [ "${FM_TEST_EVIDENCE:-0}" = 1 ]; then
+    printf '# observed no-origin direct-PR refusal: %s\n' "$(printf '%s\n' "$out" | tail -n 1)"
+  fi
+  pass "a direct-PR spawn on a project with no origin remote still refuses with the existing message"
+}
+
 test_stale_pool_base_refreshes_before_branching
 test_non_main_default_branch_refreshes_before_branching
 test_direct_pr_and_scout_refresh_before_launch
 test_dirty_pool_refuses_without_discarding_work
 test_unresolved_remote_default_refuses_pool
 test_unreachable_origin_refuses_stale_pool_base
+test_local_only_with_origin_still_refreshes_from_origin
+test_no_origin_local_only_refreshes_from_primary_local_default
+test_no_origin_direct_pr_still_refuses
 
 echo "# all fm-spawn-pool-base-freshen tests passed"
