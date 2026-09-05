@@ -371,6 +371,71 @@ test_release_frees_held_work() {
   pass "release frees held work with the captain's words recorded and the body preserved"
 }
 
+# A rejected `answer` invocation (an unrecognized flag, a retired verb, an
+# unknown command) must name the offending token and must never end on the
+# header's unrelated compatibility sentence "already closed needs rewriting",
+# which reads as a false verdict about task state; it must also leave the
+# captain-held task untouched. Covers both hold origins: a task registered
+# through `hold` and one held directly with `tasks-axi hold --kind captain`.
+test_answer_rejects_bad_usage_with_a_named_diagnostic() {
+  local home show err
+  home=$(make_home bad-usage)
+  run_captain "$home" hold sample-scripted-call \
+    --title "Choose the scripted option" --reason "captain scripted choice pending" --repo sample >/dev/null \
+    || fail "could not register the script-held captain call"
+  tasks_in "$home" add sample-raw-call "Choose the raw option" --repo sample >/dev/null \
+    || fail "could not create the raw-held task"
+  tasks_in "$home" hold sample-raw-call --reason "captain raw choice pending" --kind captain >/dev/null \
+    || fail "could not hold the raw task directly with tasks-axi"
+  printf 'go ahead\n' > "$home/decision.txt"
+
+  for id in sample-scripted-call sample-raw-call; do
+    if run_captain "$home" answer "$id" --decision-file "$home/decision.txt" --note "a note" \
+      > "$home/$id-note.out" 2> "$home/$id-note.err"; then
+      fail "answer accepted an unrecognized --note flag on $id"
+    fi
+    err=$(cat "$home/$id-note.err")
+    assert_contains "$err" "unrecognized argument: --note" \
+      "the rejected flag on $id was not named in the diagnostic"
+    assert_not_contains "$err" "already closed needs rewriting" \
+      "a bad-flag rejection on $id read as a false already-closed verdict"
+    show=$(tasks_in "$home" show "$id" --full)
+    assert_contains "$show" "state: queued" "a rejected answer invocation closed $id"
+    assert_contains "$show" "held: yes" "a rejected answer invocation released the hold on $id"
+
+    if run_captain "$home" resolve "$id" --decision-file "$home/decision.txt" \
+      > "$home/$id-resolve.out" 2> "$home/$id-resolve.err"; then
+      fail "the retired 'resolve' verb was accepted directly on fm-captain-hold.sh for $id"
+    fi
+    err=$(cat "$home/$id-resolve.err")
+    assert_contains "$err" "retired" "the retired verb rejection for $id did not explain why"
+    assert_not_contains "$err" "already closed needs rewriting" \
+      "a retired-verb rejection on $id read as a false already-closed verdict"
+  done
+
+  if run_captain "$home" bogus-command > "$home/bogus.out" 2> "$home/bogus.err"; then
+    fail "an unknown command was accepted"
+  fi
+  assert_contains "$(cat "$home/bogus.err")" "unknown command: bogus-command" \
+    "an unknown command was not named in the diagnostic"
+  assert_not_contains "$(cat "$home/bogus.err")" "already closed needs rewriting" \
+    "an unknown-command rejection read as a false already-closed verdict"
+
+  # The same two hold origins still answer and release correctly once the
+  # invocation is well formed.
+  run_captain "$home" answer sample-scripted-call --decision-file "$home/decision.txt" >/dev/null \
+    || fail "a well-formed answer failed on the script-held task"
+  show=$(tasks_in "$home" show sample-scripted-call --full)
+  assert_contains "$show" "state: done" "a well-formed answer did not close the script-held task"
+
+  run_captain "$home" answer sample-raw-call --decision-file "$home/decision.txt" --release >/dev/null \
+    || fail "a well-formed answer --release failed on the tasks-axi-held task"
+  show=$(tasks_in "$home" show sample-raw-call --full)
+  assert_contains "$show" "state: queued" "a well-formed release closed the tasks-axi-held task"
+  assert_contains "$show" "held: no" "a well-formed release did not lift the tasks-axi hold"
+  pass "a rejected answer invocation names the mistake and touches neither hold origin"
+}
+
 # Deferral is a date, not a live card: hold --until keeps the task out of
 # captain_actionable until due, tasks-axi's own date-gate expiry keeps the task
 # answerable, and Bearings renders the wait as a dated gate.
@@ -1172,6 +1237,7 @@ test_uninventoried_report_decision_refuses_completion
 test_completion_gate_attests_and_transfers
 test_answer_records_and_closes
 test_release_frees_held_work
+test_answer_rejects_bad_usage_with_a_named_diagnostic
 test_deferral_leaves_captains_call_until_due
 test_out_of_band_close_is_recordable
 test_visual_review_uses_shared_completion_owner
