@@ -34,12 +34,22 @@ PRESERVED_TOOLS='Bash Edit Read Write Skill ToolSearch WebFetch WebSearch Notebo
 # runnable work, so the guard's plan-only exclusion must allow them.
 PLAN_ONLY_TOOLS='TaskCreate TaskUpdate'
 
+# Peer-session tools. They match a delegation stem but only enumerate or
+# message an already-running Claude Code session, so the guard's peer-session
+# exclusion must allow them.
+PEER_SESSION_TOOLS='ListAgents SendMessage'
+
 # Names the plan-only exclusion must NOT release. Five of them contain a
 # plan-only name as a substring and would be let through by a substring rather
 # than exact-name match; bare Task is what a shortened entry of "task" would
 # release. Together they make the exact-name contract testable instead of
 # assumed.
 PLAN_ONLY_NEAR_MISSES='TaskCreateAgent TaskCreateWorktree TaskUpdateAgent RemoteTaskCreate Task TaskCreator'
+
+# Names the peer-session exclusion must NOT release. SendMessageBatch contains
+# the allowed name as a prefix; Agent and Task are the work-creating tools the
+# carve-out must not widen to.
+PEER_SESSION_NEAR_MISSES='SendMessageBatch Agent Task'
 
 run_tool() {
   local tool=$1 rc=0
@@ -81,6 +91,7 @@ test_guard_denies_every_currently_known_delegation_tool() {
     case "$tool" in
       TaskOutput|TaskStop|TaskGet|TaskList|CronList) continue ;;
       TaskCreate|TaskUpdate) continue ;;
+      SendMessage) continue ;;
     esac
     expect_deny "known delegation tool" "$tool"
   done
@@ -132,6 +143,27 @@ test_plan_only_exclusion_is_exact_name() {
     expect_deny "plan-only near miss" "$tool"
   done
   pass "the plan-only exclusion releases exactly two names and nothing that merely contains them"
+}
+
+test_guard_allows_peer_session_tools() {
+  # These match a delegation stem but only address an already-running Claude
+  # Code session rather than starting one. docs/subagent-guard.md owns the
+  # carve-out's rationale and its bounds.
+  local tool
+  for tool in $PEER_SESSION_TOOLS; do
+    expect_allow "peer-session tool" "$tool"
+  done
+  pass "the guard leaves peer-session ListAgents and SendMessage alone"
+}
+
+test_peer_session_exclusion_is_exact_name() {
+  # The peer-session exclusion must never widen by substring or to the
+  # work-creating tools that share a stem.
+  local tool
+  for tool in $PEER_SESSION_NEAR_MISSES; do
+    expect_deny "peer-session near miss" "$tool"
+  done
+  pass "the peer-session exclusion releases exactly two names and nothing that merely contains them"
 }
 
 test_guard_never_classifies_mcp_tools() {
@@ -281,6 +313,8 @@ test_guard_denies_hypothetical_future_tools
 test_guard_allows_ordinary_and_observe_only_tools
 test_guard_allows_session_local_todo_tools
 test_plan_only_exclusion_is_exact_name
+test_guard_allows_peer_session_tools
+test_peer_session_exclusion_is_exact_name
 test_guard_never_classifies_mcp_tools
 test_deny_message_defers_to_intake_classification
 test_escape_hatch_allows_deliberate_use
