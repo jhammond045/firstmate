@@ -162,9 +162,30 @@
 #                  written by this script; outside the worktree to avoid pi's trust gate)
 #     __PITURNEND__ absolute path to .pi/extensions/fm-primary-turnend-guard.ts in a pi secondmate home
 #     __PIWATCH__   absolute path to .pi/extensions/fm-primary-pi-watch.ts in a pi secondmate home
-#     __OPINPUT__   absolute path to the canonical operational-input encoder
 #     __WORKTREE__  absolute path to the task worktree
 #     __CURSORBIN__ resolved, cursor-verified executable for a cursor launch
+#     __KICKOFF__   short plain text opening the turn (claude, pi/pi-signed: the
+#                   brief already rode in via --append-system-prompt, see below)
+#     __POINTER__   short plain text naming the in-worktree brief copy's relative
+#                   path (every other verified harness: no verified system-prompt
+#                   flag, so the brief is BRIEF_REL, a real file the agent opens)
+# The brief is delivered through the harness's own system-prompt channel where one
+# is verified (claude, pi, pi-signed all expose --append-system-prompt), and
+# otherwise as a plain file the agent reads from inside its own worktree
+# (BRIEF_REL, computed below: a relative path to a written-then-excluded
+# .firstmate/brief.md copy, or directly to an already-in-tree brief such as a
+# secondmate's own data/charter.md). Either way the agent's first message is a
+# short ordinary sentence, never the raw brief text or an operational-input
+# envelope: AGENTS.md section 11 owns why - a fresh agent handed a big
+# machine-wrapped block on its very first turn reads that as an instruction to
+# reach outside its own sandbox, which is exactly what several launched agents
+# refused outright. state/<task-id>.inbox and state/<task-id>.status are
+# likewise reachable through the worktree-relative .firstmate/inbox and
+# .firstmate/status symlinks that this script writes, so the brief's own
+# steering-inbox and status-reporting instructions never name an absolute path
+# either. Claude's --system-prompt-snapshot defaults to recording the prompt
+# once per conversation and replaying it verbatim on resume, so a later edit to
+# BRIEF only reaches a genuinely fresh process (a relaunch), never a resumed one.
 # Verified per-harness turn-end hooks are installed automatically where enabled; some live outside the worktree.
 # Kimi uses one surgically installed Firstmate region in $HOME/.kimi-code/config.toml,
 # a firstmate-owned global hook and registry, and a gitignored per-task pointer.
@@ -1130,21 +1151,27 @@ launch_template() {
     # does NOT suppress the interactive ghost text (verified empirically), so the env
     # var is the correct control. The dim-aware composer reader in fm-tmux-lib.sh is
     # the defense-in-depth backstop for any pane this flag cannot reach.
-    claude) printf '%s' 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+    # claude and pi/pi-signed deliver the brief through the CLI's own
+    # system-prompt channel instead of as the first chat message, so the
+    # opening turn reads as an ordinary short ask rather than a wrapped
+    # instruction dump. Verified: claude --append-system-prompt (Claude Code
+    # 2.1.269, empirically confirmed to reach the model); pi --append-system-prompt
+    # is documented identically in Pi's own --help (0.82.0) but not live-tested here.
+    claude) printf '%s' 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG__--append-system-prompt "$(cat __BRIEF__)" "__KICKOFF__"' ;;
     codex)
       if [ "$kind" = secondmate ]; then
-        printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+        printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox "__POINTER__"'
       else
-        printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox -c "notify=[\"bash\",\"-c\",\"touch __TURNEND__\"]" "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+        printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox -c "notify=[\"bash\",\"-c\",\"touch __TURNEND__\"]" "__POINTER__"'
       fi
       ;;
-    opencode) printf '%s' 'OPENCODE_CONFIG_CONTENT='\''{"permission":{"*":"allow"}}'\'' opencode __MODELFLAG__--prompt "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+    opencode) printf '%s' 'OPENCODE_CONFIG_CONTENT='\''{"permission":{"*":"allow"}}'\'' opencode __MODELFLAG__--prompt "__POINTER__"' ;;
     pi|pi-signed)
       printf '%s' '__PIBIN____PITUIMODE__'
       if [ "$kind" = secondmate ]; then
-        printf '%s' ' __MODELFLAG____EFFORTFLAG__-e __PITURNEND__ -e __PIWATCH__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+        printf '%s' ' __MODELFLAG____EFFORTFLAG__-e __PITURNEND__ -e __PIWATCH__ --append-system-prompt "$(cat __BRIEF__)" "__KICKOFF__"'
       else
-        printf '%s' ' __MODELFLAG____EFFORTFLAG__-e __PIEXT__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+        printf '%s' ' __MODELFLAG____EFFORTFLAG__-e __PIEXT__ --append-system-prompt "$(cat __BRIEF__)" "__KICKOFF__"'
       fi
       ;;
     # grok (Grok Build TUI): a positional prompt starts the supervised interactive
@@ -1154,7 +1181,7 @@ launch_template() {
     # --dangerously-skip-permissions. grok's turn-end signal does NOT ride the
     # launch command - it is a Stop-event hook installed below (global hook +
     # per-task pointer), so the template is identical for ship/scout/secondmate.
-    grok) printf '%s' 'grok --always-approve __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+    grok) printf '%s' 'grok --always-approve __MODELFLAG____EFFORTFLAG__"__POINTER__"' ;;
     # Cursor Agent CLI. --trust suppresses the workspace-trust prompt, which
     # --yolo does NOT cover and which would otherwise block every spawn, since
     # each task gets a fresh worktree path cursor has never seen. --yolo is the
@@ -1167,9 +1194,9 @@ launch_template() {
     # inherited CLAUDECODE cannot outrank cursor's own marker in a process that
     # only reads the environment. Cursor exposes no effort flag, so the shared
     # effort axis is deliberately omitted and stays in task metadata only.
-    cursor) printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS -u CURSOR_INVOKED_AS __CURSORBIN__ --trust --yolo __MODELFLAG__--workspace __WORKTREE__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+    cursor) printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS -u CURSOR_INVOKED_AS __CURSORBIN__ --trust --yolo __MODELFLAG__--workspace __WORKTREE__ "__POINTER__"' ;;
     # Kimi Code rejects a positional prompt, so it launches bare and receives
-    # only an absolute brief pointer after the TUI readiness gate below.
+    # only a relative brief pointer after the TUI readiness gate below.
     # Its turn-end signal is a globally configured Stop hook plus a guarded
     # per-task worktree token, so no launch placeholder belongs here.
     kimi) printf '%s' '__KIMIBIN__ __MODELFLAG__--auto' ;;
@@ -1194,7 +1221,7 @@ launch_template() {
     # session event log instead (bin/fm-busy-lib.sh), bound by the sidecar
     # written below. Nothing to place in the template for it.
     # codex, opencode, and kimi are also markerless and share this inherited-marker hazard; changing their verified launch boundaries belongs in follow-up work.
-    muse) printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS XDG_CONFIG_HOME=__MUSECONFIG__ XDG_DATA_HOME=__MUSEDATA__ MUSE_EXPERIMENTAL_FOREIGN_PERSONAL_CONTEXT_KILL=on __MUSEBIN__ --yolo __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+    muse) printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS XDG_CONFIG_HOME=__MUSECONFIG__ XDG_DATA_HOME=__MUSEDATA__ MUSE_EXPERIMENTAL_FOREIGN_PERSONAL_CONTEXT_KILL=on __MUSEBIN__ --yolo __MODELFLAG____EFFORTFLAG__"__POINTER__"' ;;
     *) return 1 ;;
   esac
 }
@@ -2328,6 +2355,32 @@ exclude_path() {
   mkdir -p "$(dirname "$EXCL")"
   grep -qxF "$rel" "$EXCL" 2>/dev/null || echo "$rel" >> "$EXCL"
 }
+
+# Deliver the brief and the steering channels as files inside the worktree the
+# agent already operates in, rather than as absolute paths elsewhere on the
+# machine: a brief that tells a fresh agent to read and move files under
+# someone else's directory tree reads as an instruction to reach outside its
+# own sandbox, which is what made several launched agents refuse the brief
+# outright. BRIEF_REL is refreshed on every spawn, including relaunch, so a
+# replacement worker never reads a stale copy.
+WT_REAL=$(cd "$WT" && pwd -P)
+mkdir -p "$WT/.firstmate"
+case "$BRIEF_REAL" in
+  "$WT_REAL"/*) BRIEF_REL=${BRIEF_REAL#"$WT_REAL"/} ;;
+  *)
+    cp -f "$BRIEF_REAL" "$WT/.firstmate/brief.md"
+    BRIEF_REL=.firstmate/brief.md
+    ;;
+esac
+# fm_task_inbox_write also does this on the first real steer; pre-creating it
+# here means the worktree-relative alias is never a dangling symlink, so `ls
+# .firstmate/inbox/*.msg` reads as an ordinary empty directory instead of a
+# broken path.
+mkdir -p "$STATE_REAL/$ID.inbox/handled"
+ln -sfn "$STATE_REAL/$ID.inbox" "$WT/.firstmate/inbox"
+ln -sfn "$STATE_REAL/$ID.status" "$WT/.firstmate/status"
+exclude_path '.firstmate'
+
 if [ "$RELAUNCH" -eq 1 ]; then
   # Retire the previous incarnation's per-task harness wiring before arming the
   # new one. Without this, a harness switch would leave the old adapter's hook
@@ -2758,10 +2811,20 @@ sq_turnend=$(shell_quote "$TURNEND")
 sq_piext=$(shell_quote "$STATE/$ID.pi-ext.ts")
 sq_piturnend=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-turnend-guard.ts")
 sq_piwatch=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-pi-watch.ts")
-sq_opinput=$(shell_quote "$FM_ROOT/bin/fm-operational-input.sh")
 sq_worktree=$(shell_quote "$WT")
 MODELFLAG=$(model_flag_for_harness "$HARNESS" "$MODEL")
 EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT")
+# __KICKOFF__ (claude, pi/pi-signed: the brief already rode in via
+# --append-system-prompt above, so this only has to open the turn) and
+# __POINTER__ (every other harness: no verified system-prompt flag, so the
+# brief is a file in the worktree and this names it) both land inside a
+# literal double-quoted argv token in the template, so escape the one dynamic
+# part (the relative brief path) for that context rather than shell_quote's
+# single-quote form, which would be read literally there instead of stripped.
+KICKOFF_TEXT='Go ahead and get started.'
+BRIEF_REL_DQ=${BRIEF_REL//\\/\\\\}
+BRIEF_REL_DQ=${BRIEF_REL_DQ//\"/\\\"}
+POINTER_TEXT="Read the brief at $BRIEF_REL_DQ in this directory and follow it exactly."
 LAUNCH=${LAUNCH//__MODELFLAG__/$MODELFLAG}
 LAUNCH=${LAUNCH//__EFFORTFLAG__/$EFFORTFLAG}
 LAUNCH=${LAUNCH//__BRIEF__/$sq_brief}
@@ -2769,7 +2832,8 @@ LAUNCH=${LAUNCH//__TURNEND__/$sq_turnend}
 LAUNCH=${LAUNCH//__PIEXT__/$sq_piext}
 LAUNCH=${LAUNCH//__PITURNEND__/$sq_piturnend}
 LAUNCH=${LAUNCH//__PIWATCH__/$sq_piwatch}
-LAUNCH=${LAUNCH//__OPINPUT__/$sq_opinput}
+LAUNCH=${LAUNCH//__KICKOFF__/$KICKOFF_TEXT}
+LAUNCH=${LAUNCH//__POINTER__/$POINTER_TEXT}
 case "$HARNESS" in
   pi|pi-signed) LAUNCH=${LAUNCH//__PIBIN__/"$(shell_quote "$PI_BIN")"} ;;
   cursor) LAUNCH=${LAUNCH//__CURSORBIN__/"$(shell_quote "$CURSOR_BIN")"} ;;
@@ -2866,7 +2930,7 @@ if [ "$HARNESS" = kimi ]; then
     kimi_spawn_fail "kimi did not show a verified ready signal before brief delivery"
     exit 1
   fi
-  KIMI_POINTER="Read the brief at $BRIEF_REAL and follow it exactly."
+  KIMI_POINTER="Read the brief at $BRIEF_REL in this directory and follow it exactly."
   KIMI_SUBMIT_RETRIES=${FM_KIMI_SUBMIT_RETRIES:-3}
   KIMI_SUBMIT_SLEEP=${FM_KIMI_SUBMIT_SLEEP:-${FM_KIMI_POLL_INTERVAL:-0.5}}
   KIMI_SUBMIT_SETTLE=${FM_KIMI_SUBMIT_SETTLE:-0}

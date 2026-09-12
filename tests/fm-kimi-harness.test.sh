@@ -44,7 +44,7 @@ fake_screen() {
       printf 'context: 0%% (0/256k)\n╭────────────────────────────────╮\n│ > Read the brief and follow it │\n│                                │\n╰────────────────────────────────╯\n'
       ;;
     delivered)
-      printf '✨ Read the brief at %s and follow it exactly.\ncontext: 1%% (2k/256k)\n╭────────────────────────────────╮\n│ >                              │\n╰────────────────────────────────╯\n' "$FM_FAKE_BRIEF_REAL"
+      printf '✨ Read the brief at %s in this directory and follow it exactly.\ncontext: 1%% (2k/256k)\n╭────────────────────────────────╮\n│ >                              │\n╰────────────────────────────────╯\n' "$FM_FAKE_BRIEF_REL"
       ;;
     *)
       printf 'shell starting\n$ \n'
@@ -170,7 +170,7 @@ run_spawn() {
     FM_FAKE_KIMI_SWALLOWED="$case_dir/kimi.swallowed" \
     FM_FAKE_KIMI_SWALLOW_FIRST="${FM_FAKE_KIMI_SWALLOW_FIRST:-no}" \
     FM_FAKE_TMUX_CALL_LOG="$case_dir/tmux-calls.log" \
-    FM_FAKE_BRIEF_REAL="$(cd "$home/data/$id" && pwd -P)/brief.md" \
+    FM_FAKE_BRIEF_REL=".firstmate/brief.md" \
     FM_KIMI_READY_POLLS=2 FM_KIMI_DELIVERY_POLLS=2 FM_KIMI_POLL_INTERVAL=0 \
     PATH="$fakebin:$BASE_PATH" \
     "$SPAWN" "$id" "$proj" --harness kimi --mode no-mistakes --yolo off "$@" 2>&1
@@ -183,7 +183,7 @@ EOF
 }
 
 test_kimi_launch_then_send_is_verified() {
-  local id rec out rc launch pointer brief_real meta task_tmp
+  local id rec out rc launch pointer meta task_tmp
   id="kimi-success-z1-$$"
   task_tmp="/tmp/fm-$id"
   KIMI_RUNTIME_TASK_TMP=$task_tmp
@@ -204,10 +204,9 @@ test_kimi_launch_then_send_is_verified() {
   assert_not_contains "$launch" "turn-ended" "kimi launch embedded a turn-end path"
   assert_not_contains "$launch" "__TURNEND__" "kimi launch retained a turn-end placeholder"
 
-  brief_real="$(cd "$HOME_DIR/data/$id" && pwd -P)/brief.md"
   pointer=$(cat "$CASE_DIR/pointer.log")
-  [ "$pointer" = "Read the brief at $brief_real and follow it exactly." ] \
-    || fail "kimi pointer was not the exact absolute-path-only instruction: $pointer"
+  [ "$pointer" = "Read the brief at .firstmate/brief.md in this directory and follow it exactly." ] \
+    || fail "kimi pointer was not the exact worktree-relative instruction: $pointer"
   meta="$HOME_DIR/state/$id.meta"
   assert_grep 'model=kimi-code/k3' "$meta" "kimi meta lost the requested model"
   assert_grep 'effort=high' "$meta" "kimi meta did not retain the unsupported effort axis"
@@ -439,6 +438,8 @@ test_kimi_teardown_removes_pointer_and_registry_token() {
   assert_absent "$WT_DIR/.fm-kimi-turnend" "Kimi token pointer survived teardown"
   assert_absent "$HOME_DIR/.kimi-code/fm-turn-end.d/$token" "Kimi registry token survived teardown"
   assert_absent "$HOME_DIR/state/$id.kimi-turnend-token" "Kimi token state survived teardown"
+  assert_absent "$WT_DIR/.firstmate" \
+    "the brief/inbox/status delivery directory survived teardown and would contaminate the next pooled task"
   pass "fm-teardown: Kimi task pointer and registry token are removed"
 }
 

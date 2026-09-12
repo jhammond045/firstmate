@@ -55,8 +55,9 @@
 # "blocked:": pause for a known external wait expected to clear on its own,
 # blocked when firstmate must act.
 # Every scaffold also carries the steering-inbox receive-and-ack section:
-# process state/<id>.inbox/*.msg in order and acknowledge each by moving it to
-# handled/ (record, doorbell, and ladder owned by bin/fm-task-inbox-lib.sh).
+# process .firstmate/inbox/*.msg (a worktree-relative alias fm-spawn.sh writes
+# for the real state/<id>.inbox/) in order and acknowledge each by moving it
+# to handled/ (record, doorbell, and ladder owned by bin/fm-task-inbox-lib.sh).
 # Ship tasks include a project-memory section so durable project-intrinsic
 # learnings can be committed to AGENTS.md through the project's delivery path;
 # it carries the AGENTS.md authoring bar (widely useful knowledge only, pointers
@@ -197,8 +198,14 @@ shell_quote() {
   printf "'"
 }
 
-STATUS_FILE=$(shell_quote "$STATE/$ID.status")
-INBOX_DIR=$(shell_quote "$STATE/$ID.inbox")
+# Reached through worktree-relative aliases fm-spawn.sh writes into the
+# worktree itself (.firstmate/status, .firstmate/inbox -> the real files under
+# state/, excluded from git), not the absolute state/ paths: a fresh agent
+# asked to read and move files under an absolute path outside its own
+# directory reads that as reaching past its own sandbox, which is what made
+# several launched agents refuse the brief outright (bin/fm-spawn.sh header).
+STATUS_FILE=.firstmate/status
+INBOX_DIR=.firstmate/inbox
 
 # The receive-and-ack half of the steering-inbox contract, included in every
 # scaffold kind. The record format, doorbell line, and re-ring ladder are
@@ -235,7 +242,7 @@ else
   PROJECT_CLONES_NOTE="The projects above are local clones for work you supervise; they are not an exclusive ownership claim."
 fi
 cat > "$BRIEF" <<EOF
-You are a persistent second mate managed by the main firstmate. Work on your own; do not wait for a human.
+You're a persistent second mate reporting to the main firstmate. You run this home solo - no one watches the session live - so handle routine work on your own judgment and report through the channel below.
 
 # Charter
 $SECONDMATE_CHARTER
@@ -339,7 +346,7 @@ fi
 
 if [ "$KIND" = scout ]; then
 cat > "$BRIEF" <<EOF
-You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
+This is a task from firstmate. You're working it solo - there's no one to check in with mid-task, so carry it through the steps below on your own judgment and use the escalation path when you genuinely need a decision.
 
 # Task
 {TASK}
@@ -452,7 +459,7 @@ esac
 DOD=${DOD%$'\n'}
 
 cat > "$BRIEF" <<EOF
-You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
+This is a task from firstmate. You're working it solo - there's no one to check in with mid-task, so carry it through the steps below on your own judgment and use the escalation path when you genuinely need a decision.
 
 # Task
 {TASK}

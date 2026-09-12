@@ -75,7 +75,7 @@ case "${1:-}" in
           printf 'zsh' > "$D/command"
           [ -z "${FM_FAKE_EXIT_TRANSPORT_FAIL_AFTER_STOP:-}" ] || exit 1
           ;;
-        *'encode launch-brief'*)
+        *'--append-system-prompt'*|*'Read the brief at'*)
           cat "$D/becomes" > "$D/command"
           [ -z "${FM_FAKE_LAUNCH_TRANSPORT_FAIL_AFTER_START:-}" ] || exit 1
           ;;
@@ -269,7 +269,7 @@ test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint() {
   [ "$(journal_field "$dir" rl1 phase)" = complete ] \
     || fail "the transaction journal should end complete"
   assert_grep "/exit" "$dir/fake/literal" "the previous agent should have been exited"
-  assert_grep "encode launch-brief" "$dir/fake/literal" "the replacement should have been launched"
+  assert_grep "--append-system-prompt" "$dir/fake/literal" "the replacement should have been launched"
   pass "fm-control relaunch: a same-harness relaunch replaces the agent in the same endpoint and worktree"
 }
 
@@ -390,6 +390,10 @@ test_relaunch_appends_the_progress_note_to_the_instructions() {
   assert_grep "reproduced the crash in parser.go" "$brief" "the note text should reach the replacement"
   assert_grep "reproduced the crash in parser.go" "$dir/home/state/rl2.control-relaunch.note" \
     "the note should also be preserved beside the transaction record"
+  assert_grep "list .firstmate/inbox/*.msg" "$brief" \
+    "the progress note must point at the worktree-relative inbox, not an absolute state/ path"
+  assert_no_grep "$dir/home/state/rl2.inbox" "$brief" \
+    "the progress note must never name the real inbox's absolute path"
   pass "fm-control relaunch: the progress note lands in the instructions the replacement reads"
 }
 
@@ -572,7 +576,7 @@ test_wiring_removal_failure_refuses_before_replacement_arm() {
   assert_contains "$out" "could not retire claude wiring" \
     "the failure should identify prior wiring cleanup"
   [ -e "$hook" ] || fail "the fixture should retain the undeletable prior hook"
-  assert_no_grep "encode launch-brief" "$dir/fake/literal" \
+  assert_no_grep "--append-system-prompt" "$dir/fake/literal" \
     "replacement launch must not be armed after wiring cleanup fails"
   [ "$(journal_field "$dir" rl29 phase)" = failed:launching ] \
     || fail "the transaction should record the partial launch failure"

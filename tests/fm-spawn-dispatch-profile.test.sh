@@ -165,9 +165,48 @@ test_no_profile_keeps_claude_profile_defaults() {
   assert_meta_profile "$HOME_DIR/state/$id.meta" claude default default
 
   launch=$(cat "$LAUNCH_LOG")
-  expected="env -u CURSOR_AGENT -u CURSOR_INVOKED_AS CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions \"\$('${ROOT}/bin/fm-operational-input.sh' encode launch-brief < '$HOME_DIR/data/$id/brief.md')\""
+  expected="env -u CURSOR_AGENT -u CURSOR_INVOKED_AS CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions --append-system-prompt \"\$(cat '$HOME_DIR/data/$id/brief.md')\" \"Go ahead and get started.\""
   [ "$launch" = "$expected" ] || fail "no-profile claude launch did not use the canonical launch kind"$'\n'"expected: $expected"$'\n'"actual:   $launch"
   pass "no --model/--effort records defaults and types the claude launch instructions"
+}
+
+test_brief_and_steering_channels_land_inside_the_worktree() {
+  local rec id out status state_real
+  id=profile-firstmate-dir-z1z
+  rec=$(make_spawn_case profile-firstmate-dir claude "$id")
+  read_case_record "$rec"
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "claude spawn should succeed"
+
+  [ -f "$WT_DIR/.firstmate/brief.md" ] || fail "spawn did not copy the out-of-tree brief into the worktree"
+  cmp -s "$WT_DIR/.firstmate/brief.md" "$HOME_DIR/data/$id/brief.md" \
+    || fail "the in-worktree brief copy diverged from the original brief"
+
+  state_real=$(cd "$HOME_DIR/state" && pwd -P)
+  [ -L "$WT_DIR/.firstmate/inbox" ] || fail "spawn did not create a worktree-relative inbox alias"
+  [ "$(readlink "$WT_DIR/.firstmate/inbox")" = "$state_real/$id.inbox" ] \
+    || fail "the inbox alias does not point at the task's real steering inbox"
+  [ -L "$WT_DIR/.firstmate/status" ] || fail "spawn did not create a worktree-relative status alias"
+  [ "$(readlink "$WT_DIR/.firstmate/status")" = "$state_real/$id.status" ] \
+    || fail "the status alias does not point at the task's real status file"
+
+  assert_no_grep '.firstmate' <(git -C "$WT_DIR" status --porcelain) \
+    "the .firstmate/ delivery files must never show up as untracked worktree changes"
+
+  # The alias is not just structurally correct - moving a file through it (the
+  # brief's own steering-inbox instructions) must actually land in the real,
+  # durable inbox the watcher and firstmate itself read. The real inbox
+  # directory is created lazily on the first steer, so the symlink is dangling
+  # until then; create the real target directly, then exercise the alias.
+  mkdir -p "$state_real/$id.inbox/handled"
+  echo "steer body" > "$WT_DIR/.firstmate/inbox/001.msg"
+  ( cd "$WT_DIR" && mv .firstmate/inbox/001.msg .firstmate/inbox/handled/ )
+  [ -f "$state_real/$id.inbox/handled/001.msg" ] \
+    || fail "a move through the worktree-relative inbox alias did not reach the real inbox"
+
+  pass "the brief, steering inbox, and status file are all reachable by relative path inside the worktree"
 }
 
 test_non_cursor_launch_clears_inherited_cursor_markers() {
@@ -210,7 +249,7 @@ test_relative_home_overrides_launch_with_absolute_cross_process_paths() {
   launch=$(cat "$LAUNCH_LOG")
   assert_contains "$launch" "-e '$home_real/state/$id.pi-ext.ts'" \
     "relative FM_STATE_OVERRIDE leaked into Pi's cross-process extension path"
-  assert_contains "$launch" "< '$home_real/data/$id/brief.md'" \
+  assert_contains "$launch" "--append-system-prompt \"\$(cat '$home_real/data/$id/brief.md')\"" \
     "relative FM_DATA_OVERRIDE leaked into the cross-process brief path"
   pass "relative home overrides ignore CDPATH and become absolute before spawn launch construction"
 }
@@ -239,7 +278,7 @@ test_home_defaults_preserve_absolute_or_resolve_relative_paths() {
   launch=$(cat "$LAUNCH_LOG")
   assert_contains "$launch" "-e '$home_real/state/$relative_id.pi-ext.ts'" \
     "relative FM_HOME leaked into Pi's default cross-process extension path"
-  assert_contains "$launch" "< '$home_real/data/$relative_id/brief.md'" \
+  assert_contains "$launch" "--append-system-prompt \"\$(cat '$home_real/data/$relative_id/brief.md')\"" \
     "relative FM_HOME leaked into the default cross-process brief path"
 
   linked_home="$CASE_DIR/home-link"
@@ -259,7 +298,7 @@ test_home_defaults_preserve_absolute_or_resolve_relative_paths() {
   launch=$(cat "$LAUNCH_LOG")
   assert_contains "$launch" "-e '$linked_home/state/$absolute_id.pi-ext.ts'" \
     "absolute FM_HOME spelling changed in Pi's default cross-process extension path"
-  assert_contains "$launch" "< '$linked_home/data/$absolute_id/brief.md'" \
+  assert_contains "$launch" "--append-system-prompt \"\$(cat '$linked_home/data/$absolute_id/brief.md')\"" \
     "absolute FM_HOME spelling changed in the default cross-process brief path"
   pass "FM_HOME defaults resolve relative paths and preserve absolute spellings"
 }
@@ -287,7 +326,7 @@ test_absolute_override_spelling_is_preserved_in_launch_paths() {
   launch=$(cat "$LAUNCH_LOG")
   assert_contains "$launch" "-e '$linked_home/state/$id.pi-ext.ts'" \
     "absolute FM_STATE_OVERRIDE spelling changed in Pi's cross-process extension path"
-  assert_contains "$launch" "< '$linked_home/data/$id/brief.md'" \
+  assert_contains "$launch" "--append-system-prompt \"\$(cat '$linked_home/data/$id/brief.md')\"" \
     "absolute FM_DATA_OVERRIDE spelling changed in the cross-process brief path"
   pass "absolute override spellings are preserved in spawn launch paths"
 }
@@ -496,8 +535,8 @@ test_grok_omits_invalid_max_reasoning_effort() {
   expect_code 0 "$status" "grok spawn with unsupported max reasoning effort should omit the effort flag"
   assert_meta_profile "$HOME_DIR/state/$id.meta" grok grok-4 max
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "grok --always-approve --model 'grok-4' \"\$('${ROOT}/bin/fm-operational-input.sh' encode launch-brief < " \
-    "grok launch did not preserve the model flag and typed brief when max effort was omitted"
+  assert_contains "$launch" "grok --always-approve --model 'grok-4' \"Read the brief at .firstmate/brief.md in this directory and follow it exactly.\"" \
+    "grok launch did not preserve the model flag and the brief pointer when max effort was omitted"
   assert_not_contains "$launch" "--reasoning-effort" "grok launch must omit unsupported max reasoning effort"
   assert_not_contains "$launch" "--effort" "grok launch must not fall back to --effort for reasoning effort"
   pass "grok omits unsupported max reasoning effort"
@@ -515,8 +554,8 @@ test_grok_omits_invalid_xhigh_reasoning_effort() {
   expect_code 0 "$status" "grok spawn with unsupported xhigh reasoning effort should omit the effort flag"
   assert_meta_profile "$HOME_DIR/state/$id.meta" grok grok-4 xhigh
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "grok --always-approve --model 'grok-4' \"\$('${ROOT}/bin/fm-operational-input.sh' encode launch-brief < " \
-    "grok launch did not preserve the model flag and typed brief when xhigh effort was omitted"
+  assert_contains "$launch" "grok --always-approve --model 'grok-4' \"Read the brief at .firstmate/brief.md in this directory and follow it exactly.\"" \
+    "grok launch did not preserve the model flag and the brief pointer when xhigh effort was omitted"
   assert_not_contains "$launch" "--reasoning-effort" "grok launch must omit unsupported xhigh reasoning effort"
   assert_not_contains "$launch" "--effort" "grok launch must not fall back to --effort for reasoning effort"
   pass "grok omits unsupported xhigh reasoning effort"
@@ -548,7 +587,8 @@ test_cursor_threads_model_workspace_and_omits_effort_axis() {
   assert_not_contains "$launch" " -w " "cursor launch must never allocate a second worktree"
   # An inherited CLAUDECODE would otherwise outrank cursor's own marker.
   assert_contains "$launch" "env -u CLAUDECODE" "cursor launch must clear foreign primary markers"
-  assert_contains "$launch" "encode launch-brief" "cursor launch did not deliver the brief positionally"
+  assert_contains "$launch" "Read the brief at .firstmate/brief.md in this directory and follow it exactly." \
+    "cursor launch did not deliver the brief pointer positionally"
   assert_not_contains "$launch" "--effort" "cursor launch must not invent a separate effort flag"
   assert_not_contains "$launch" "--reasoning-effort" "cursor launch must not invent a separate reasoning-effort flag"
   assert_grep 'harness=cursor' "$HOME_DIR/state/$id.meta" "cursor harness was not recorded in meta"
@@ -627,8 +667,8 @@ test_pi_threads_model_and_max_effort() {
     "pi launch did not force the regular TUI while threading the requested model and max thinking level"
   assert_not_contains "$launch" "FM_FIRSTMATE_PI_LAUNCH_BRIEF=" \
     "pi launch still exports the removed Calm input-reroute binding"
-  assert_contains "$launch" "fm-operational-input.sh' encode launch-brief" \
-    "pi launch lost the canonical typed launch-brief envelope"
+  assert_contains "$launch" "--append-system-prompt \"\$(cat '$HOME_DIR/data/$id/brief.md')\" \"Go ahead and get started.\"" \
+    "pi launch lost the system-prompt brief delivery and plain kickoff message"
   pass "pi receives --model and --thinking max profile flags"
 }
 
@@ -647,8 +687,8 @@ test_pi_signed_threads_shared_pi_profile_and_preserves_identity() {
   launch=$(cat "$LAUNCH_LOG")
   assert_contains "$launch" "FM_PI_HARNESS=pi-signed '$FAKEBIN_DIR/pi-signed' --tui-mode regular --model 'openai-codex/gpt-5.6-sol' --thinking 'max' -e" \
     "pi-signed launch did not force the regular TUI with Pi's model, thinking, and extension semantics"
-  assert_contains "$launch" "fm-operational-input.sh' encode launch-brief" \
-    "pi-signed launch lost the canonical typed launch-brief envelope"
+  assert_contains "$launch" "--append-system-prompt \"\$(cat '$HOME_DIR/data/$id/brief.md')\" \"Go ahead and get started.\"" \
+    "pi-signed launch lost the system-prompt brief delivery and plain kickoff message"
   assert_present "$HOME_DIR/state/$id.pi-ext.ts" "pi-signed launch did not install Pi's turn-end extension"
   assert_present "$HOME_DIR/state/$id.busy-gen" "pi-signed spawn did not arm the busy-state contract"
   assert_contains "$(cat "$HOME_DIR/state/$id.busy-state")" "state=busy source=fm-spawn" \
@@ -827,6 +867,7 @@ test_active_dispatch_profile_does_not_block_secondmate_launch() {
 }
 
 test_no_profile_keeps_claude_profile_defaults
+test_brief_and_steering_channels_land_inside_the_worktree
 test_non_cursor_launch_clears_inherited_cursor_markers
 test_relative_home_overrides_launch_with_absolute_cross_process_paths
 test_home_defaults_preserve_absolute_or_resolve_relative_paths

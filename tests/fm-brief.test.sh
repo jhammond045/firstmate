@@ -630,8 +630,8 @@ test_secondmate_directory_paths_are_absolute_and_output_is_stable() {
   )
   cmp -s "$baseline" "$brief" \
     || fail "relative FM_HOME changed charter bytes compared with the same absolute home"
-  assert_grep ">> '$home/state/relative-home.status'" "$brief" \
-    "relative FM_HOME did not render an absolute secondmate status path"
+  assert_grep '>> .firstmate/status' "$brief" \
+    "relative FM_HOME changed the worktree-relative secondmate status path"
 
   brief="$home/data/relative-state/brief.md"
   FM_HOME="$home" FM_STATE_OVERRIDE="$state_override" FM_SECONDMATE_CHARTER=x \
@@ -646,8 +646,8 @@ test_secondmate_directory_paths_are_absolute_and_output_is_stable() {
   )
   cmp -s "$baseline" "$brief" \
     || fail "relative FM_STATE_OVERRIDE changed charter bytes compared with the same absolute state directory"
-  assert_grep ">> '$state_override/relative-state.status'" "$brief" \
-    "relative FM_STATE_OVERRIDE did not render an absolute secondmate status path"
+  assert_grep '>> .firstmate/status' "$brief" \
+    "relative FM_STATE_OVERRIDE changed the worktree-relative secondmate status path"
 
   brief="$data_override/relative-data/brief.md"
   FM_HOME="$home" FM_DATA_OVERRIDE="$data_override" FM_SECONDMATE_CHARTER=x \
@@ -662,8 +662,8 @@ test_secondmate_directory_paths_are_absolute_and_output_is_stable() {
   )
   cmp -s "$baseline" "$brief" \
     || fail "relative FM_DATA_OVERRIDE changed charter bytes compared with the same absolute data directory"
-  assert_grep ">> '$home/state/relative-data.status'" "$brief" \
-    "relative FM_DATA_OVERRIDE changed the absolute default status path"
+  assert_grep '>> .firstmate/status' "$brief" \
+    "relative FM_DATA_OVERRIDE changed the worktree-relative secondmate status path"
 
   err="$root/unresolved.err"
   (
@@ -693,7 +693,7 @@ test_secondmate_directory_paths_are_absolute_and_output_is_stable() {
   assert_grep "FM_DATA_OVERRIDE directory cannot be resolved: missing-data" "$err" \
     "unresolved relative FM_DATA_OVERRIDE did not fail loudly"
 
-  pass "fm-brief.sh: relative directory inputs ignore CDPATH, render stable absolute charter paths, or fail loudly"
+  pass "fm-brief.sh: relative directory inputs ignore CDPATH, render a stable worktree-relative status path, or fail loudly"
 }
 
 test_herdr_lab_contract_applies_to_scouts_but_not_secondmates() {

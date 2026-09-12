@@ -251,7 +251,8 @@ EOF
     "muse launch did not forward its non-secret data root"
   assert_not_contains "$launch" 'META_API_KEY' "muse launch exposed META_API_KEY in worker argv"
   assert_not_contains "$launch" 'test-key' "muse launch exposed the credential value in worker argv"
-  assert_contains "$launch" 'encode launch-brief' "muse launch did not deliver the brief positionally"
+  assert_contains "$launch" 'Read the brief at .firstmate/brief.md in this directory and follow it exactly.' \
+    "muse launch did not deliver the brief pointer positionally"
   assert_grep 'harness=muse' "$home/state/$id.meta" "muse harness was not recorded in meta"
   pass "muse spawn launches with autonomy, privacy control, and a positional brief"
 }

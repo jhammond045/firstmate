@@ -108,6 +108,13 @@ OpenCode uses `.opencode/plugins/fm-primary-watch-arm.js`, which coordinates wit
 Pi and pi-signed use the tracked `.pi/extensions/fm-primary-turnend-guard.ts` plus the tracked `.pi/extensions/fm-primary-pi-watch.ts`, both project-local extensions the Pi engine auto-discovers once trusted.
 When changing any primary watcher adapter, update `docs/supervision-protocols/`, `docs/turnend-guard.md` if a shared idle or turn-end hook changed, and the relevant concise fact below.
 
+## Brief delivery
+
+`bin/fm-spawn.sh`'s header comment is the single owner of the brief-delivery contract.
+In short: `claude`, `pi`, and `pi-signed` carry the brief through the CLI's own verified `--append-system-prompt` flag rather than as the first chat message; every other verified harness reads it from a real file in its own worktree (`.firstmate/brief.md`, or an already-in-tree brief such as a secondmate's `data/charter.md`).
+Either way the agent's actual first message is one short plain sentence, never the raw brief text or an operational-input envelope.
+The steering inbox and status file are reachable the same way, through `.firstmate/inbox` and `.firstmate/status` symlinks `fm-spawn` writes into the worktree.
+
 ## Launch profile axes
 
 `bin/fm-spawn.sh` accepts concrete `--harness`, `--model`, and `--effort` values chosen by firstmate at intake.
@@ -426,7 +433,7 @@ FM_HARNESS_LIVENESS_DRIFT=1 bin/fm-test-run.sh tests/fm-harness-liveness-drift-l
 
 Firstmate acquires and enters the treehouse worktree before launching Cursor, then passes that same absolute path through `--workspace`.
 NEVER pass Cursor's own `-w/--worktree`: it allocates a SECOND worktree under `~/.cursor/worktrees` and would break firstmate's worktree-isolation contract.
-The raw CLI accepts repeatable `--add-dir <path>` for deliberate multi-root workspaces; the adapter adds none, and the brief rides inline as the positional prompt, so the private brief directory needs no grant.
+The raw CLI accepts repeatable `--add-dir <path>` for deliberate multi-root workspaces; the adapter adds none, and cursor reads the brief from its own worktree copy (`.firstmate/brief.md`, named by the positional pointer prompt), so no grant to a private brief directory is needed.
 
 Spawn a Cursor scout with an explicit model:
 
@@ -454,10 +461,10 @@ Kimi Code CLI launches from the absolute path resolved from `PATH`, falling back
 | Composer | Bordered box with a bare `>` prompt glyph and no observed ghost or placeholder text. |
 | Effort | No reasoning-effort flag exists, so requested effort is recorded in task metadata but omitted from launch. |
 
-`fm-spawn.sh` launches Kimi bare, waits for the composer box or `Welcome to Kimi Code!`, sends only `Read the brief at <absolute-path> and follow it exactly.`, and requires a cleared composer plus either the echoed `✨` submission or nonzero context before accepting delivery.
+`fm-spawn.sh` launches Kimi bare, waits for the composer box or `Welcome to Kimi Code!`, sends only `Read the brief at <relative-path> in this directory and follow it exactly.`, and requires a cleared composer plus either the echoed `✨` submission or nonzero context before accepting delivery.
 This launch-then-send shape is mandatory because Kimi rejects a positional brief as an unknown command.
 Sending before readiness was reproduced as a silent drop with a zero exit status, an empty composer, `context: 0%`, no echoed user message, and a healthy-looking idle pane.
-The brief path must be absolute because the brief lives outside the task worktree, and Kimi reads it there without `--add-dir`.
+The brief path is relative to the worktree because `fm-spawn` writes a copy into the worktree itself (`.firstmate/brief.md`, excluded via `.git/info/exclude`) rather than pointing at the original outside it, so Kimi reads it with its normal cwd-relative access and needs no `--add-dir`.
 
 Observed live spinner captures included optional leading whitespace, a moon-phase glyph, whitespace around `·`, and rotating tip text, with the same shape observed during tool execution.
 Because every captured spinner row had whitespace on both sides of `·`, the matcher requires that whitespace, deliberately does not match the never-observed zero-whitespace form, and does not require trailing tip text.
