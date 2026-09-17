@@ -231,7 +231,7 @@ INBOX_SECTION=${INBOX_SECTION%$'\n'}
 # both the ship and scout scaffolds. Kept as a single owner here rather than
 # duplicated inline so the wording can't drift between the two.
 IFS= read -r -d '' WAIT_PARAGRAPH <<'EOF' || true
-Wait in the foreground: poll a check you are waiting on inside ONE foreground bash until-loop that sleeps ~150s, and when a single call hits the harness's time cap, start a fresh foreground loop in your next turn. Never end a turn on a backgrounded wait, a scheduled task, or an "I'll check back later" note - a foreground wait is visibly alive, while a turn that ends on a background job is indistinguishable from a dead agent, so firstmate comes looking, which costs a rescue and can interrupt real work.
+Wait in the foreground: poll a check you are waiting on inside ONE foreground bash until-loop that sleeps ~150s, and when the harness caps a call at ten minutes, start a fresh foreground loop in your next turn. Never end a turn on a backgrounded wait, a scheduled task, or an "I'll check back later" note - a foreground wait is visibly alive, while a turn that ends on a background job is indistinguishable from a dead agent, so firstmate comes looking, which costs a rescue and can interrupt real work.
 EOF
 WAIT_PARAGRAPH=${WAIT_PARAGRAPH%$'\n'}
 

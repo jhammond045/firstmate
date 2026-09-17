@@ -807,6 +807,8 @@ test_waiting_contract_scoped_by_variant() {
     "ship brief missing the foreground-wait rule"
   assert_grep "backgrounded wait, a scheduled task, or an \"I'll check back later\" note" "$ship" \
     "ship brief missing the never-end-on-a-background-wait wording"
+  assert_grep "when the harness caps a call at ten minutes" "$ship" \
+    "ship brief missing the ten-minute cap fact that makes the foreground-loop instruction actionable"
   assert_grep "Commit early, not just at the end" "$ship" \
     "ship brief missing the commit-early rule"
   assert_grep "it is part of the deliverable, not an epilogue" "$ship" \
