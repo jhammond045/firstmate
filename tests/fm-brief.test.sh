@@ -791,6 +791,46 @@ test_scout_and_secondmate_scaffold() {
   pass "fm-brief: scout and secondmate code paths still scaffold well-formed briefs"
 }
 
+# The foreground-wait contract must land next to the status-reporting rule in
+# ship and scout scaffolds, with ship alone also getting commit-early and
+# write-your-report-before-you-exit (a scout's worktree is scratch and its
+# report step is already covered by its own Definition of done). The
+# secondmate charter is governed by its own home's full AGENTS.md supervision
+# contract (AGENTS.md section 8), so it must not carry a duplicate copy.
+test_waiting_contract_scoped_by_variant() {
+  local ship scout charter
+  FM_HOME="$BRIEF_HOME" "$ROOT/bin/fm-brief.sh" brief-wait-ship beta \
+    --mode no-mistakes --branch fix/brief-wait-ship/probe >/dev/null 2>&1 \
+    || fail "fm-brief.sh ship scaffold exited non-zero"
+  ship="$BRIEF_HOME/data/brief-wait-ship/brief.md"
+  assert_grep "Wait in the foreground" "$ship" \
+    "ship brief missing the foreground-wait rule"
+  assert_grep "backgrounded wait, a scheduled task, or an \"I'll check back later\" note" "$ship" \
+    "ship brief missing the never-end-on-a-background-wait wording"
+  assert_grep "Commit early, not just at the end" "$ship" \
+    "ship brief missing the commit-early rule"
+  assert_grep "it is part of the deliverable, not an epilogue" "$ship" \
+    "ship brief missing the write-your-report-before-you-exit rule"
+
+  FM_HOME="$BRIEF_HOME" "$ROOT/bin/fm-brief.sh" brief-wait-scout beta --scout >/dev/null 2>&1 \
+    || fail "fm-brief.sh scout scaffold exited non-zero"
+  scout="$BRIEF_HOME/data/brief-wait-scout/brief.md"
+  assert_grep "Wait in the foreground" "$scout" \
+    "scout brief missing the foreground-wait rule"
+  assert_no_grep "Commit early, not just at the end" "$scout" \
+    "scout brief wrongly claims a commit makes scratch worktree work survive - its worktree is discarded at teardown"
+
+  FM_SECONDMATE_CHARTER='Supervise the beta domain.' \
+    FM_HOME="$BRIEF_HOME" "$ROOT/bin/fm-brief.sh" brief-wait-sm --secondmate beta >/dev/null 2>&1 \
+    || fail "fm-brief.sh secondmate scaffold exited non-zero"
+  charter="$BRIEF_HOME/data/brief-wait-sm/brief.md"
+  assert_no_grep "Wait in the foreground" "$charter" \
+    "secondmate charter should not duplicate the foreground-wait rule already owned by its home's AGENTS.md section 8"
+  assert_no_grep "Commit early, not just at the end" "$charter" \
+    "secondmate charter should not carry the ship-only commit-early rule"
+  pass "fm-brief.sh: foreground-wait contract lands on ship and scout, not secondmate"
+}
+
 test_script_parses
 test_no_heredoc_in_command_substitution
 test_help_includes_entire_header
@@ -813,3 +853,4 @@ test_secondmate_directory_paths_are_absolute_and_output_is_stable
 test_pause_verb_override_renders_all_brief_scaffolds
 test_scout_and_secondmate_load_decision_hold_policy
 test_scout_and_secondmate_scaffold
+test_waiting_contract_scoped_by_variant
