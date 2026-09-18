@@ -54,6 +54,13 @@
 # declared-external-wait verb (FM_CLASSIFY_PAUSED_VERB, default "paused") from
 # "blocked:": pause for a known external wait expected to clear on its own,
 # blocked when firstmate must act.
+# The ship and scout status rules also carry the foreground-wait contract next
+# to it: poll a check inside one foreground bash until-loop (~150s sleep) and
+# never end a turn on a backgrounded wait, a scheduled task, or a "check back
+# later" note, because a background wait is indistinguishable from a dead
+# agent and costs firstmate a rescue. Ship briefs add commit-early and
+# write-your-report-before-you-exit next to it, since only a ship task commits
+# code that must survive a crashed session.
 # Every scaffold also carries the steering-inbox receive-and-ack section:
 # process .firstmate/inbox/*.msg (a worktree-relative alias fm-spawn.sh writes
 # for the real state/<id>.inbox/) in order and acknowledge each by moving it
@@ -220,6 +227,14 @@ The move IS the acknowledgement: without it firstmate rings again and eventually
 EOF
 INBOX_SECTION=${INBOX_SECTION%$'\n'}
 
+# Shared foreground-wait paragraph appended to the status-reporting rule in
+# both the ship and scout scaffolds. Kept as a single owner here rather than
+# duplicated inline so the wording can't drift between the two.
+IFS= read -r -d '' WAIT_PARAGRAPH <<'EOF' || true
+Wait in the foreground: poll a check you are waiting on inside ONE foreground bash until-loop that sleeps ~150s, and when the harness caps a call at ten minutes, start a fresh foreground loop in your next turn. Never end a turn on a backgrounded wait, a scheduled task, or an "I'll check back later" note - a foreground wait is visibly alive, while a turn that ends on a background job is indistinguishable from a dead agent, so firstmate comes looking, which costs a rescue and can interrupt real work.
+EOF
+WAIT_PARAGRAPH=${WAIT_PARAGRAPH%$'\n'}
+
 if [ "$KIND" = secondmate ]; then
 SECONDMATE_PROJECTS=""
 idx=1
@@ -373,6 +388,7 @@ The report is the only thing that survives, so anything worth keeping must be in
    known external wait you expect to clear on its own (an upstream release, a rate-limit reset):
    firstmate then leaves your idle pane alone and rechecks it on a long cadence instead of
    treating it as a possible wedge. Use \`blocked:\` when you are stuck and need help.
+   $WAIT_PARAGRAPH
 5. If you hit the same obstacle twice, append \`blocked: {why}\` and stop; firstmate will help.
 6. If a decision belongs to a human (product choices, destructive actions),
    append \`needs-decision: {summary of options}\` and stop. Firstmate will reply with the decision.
@@ -492,6 +508,12 @@ $RULE1
    known external wait you expect to clear on its own (an upstream release, a rate-limit reset,
    a scheduled window): firstmate then leaves your idle pane alone and rechecks it on a long
    cadence instead of treating it as a possible wedge. Use \`blocked:\` when you are stuck and need help.
+   $WAIT_PARAGRAPH
+   Commit early, not just at the end: a commit is what lets your work survive a crashed or exited
+   session, so uncommitted changes in your worktree are one bad moment from gone. If this brief's
+   Task section asks for a written record - a report file, a summary doc - write it before you
+   exit, not after: it is part of the deliverable, not an epilogue, and work that's done but not
+   reported is not done.
 5. If you hit the same obstacle twice, append \`blocked: {why}\` and stop; firstmate will help.
 6. If a decision belongs above the implementation worker (product choices, destructive actions, ask-user findings),
    append \`needs-decision: {summary of options}\` and stop. Firstmate will reply with the decision.
