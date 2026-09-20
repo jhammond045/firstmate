@@ -41,10 +41,12 @@
 # substituted verbatim into every place the brief names the branch; its absence
 # is a loud error, never a silent fm/<task-id> default that would override the
 # captain's [type]/[JIRA-nnn]/[description] convention.
-# The generated ship brief records the chosen mode as a fixed machine-readable
-# "Delivery contract: mode=<mode>" line. bin/fm-spawn.sh reads that line and refuses
-# to launch a ship task whose explicit --mode disagrees, so an adjusted brief and the
-# recorded task metadata cannot drift apart.
+# The generated ship brief records the chosen mode and branch as a fixed
+# machine-readable "Delivery contract: mode=<mode> branch=<branch>" line.
+# bin/fm-spawn.sh reads that line, refuses to launch a ship task whose explicit
+# --mode disagrees, and records the branch into state/<id>.meta's branch=
+# field so bin/fm-merge-local.sh can land the branch this task was actually
+# briefed with instead of guessing fm/<id>.
 # Ship briefs begin with a worktree-isolation assertion before the branch step.
 # --mode is refused on scout and secondmate scaffolds: a scout's deliverable is a
 # report rather than a merge, and a charter is not a delivery contract.
@@ -414,15 +416,16 @@ fi
 
 # Ship task: shape Setup / Rule 1 / Definition of done by this task's explicit
 # delivery mode, validated above. The generated DOD opens with the fixed
-# "Delivery contract: mode=<mode>" line that bin/fm-spawn.sh checks against its own
-# explicit --mode before launching.
+# "Delivery contract: mode=<mode> branch=<branch>" line. bin/fm-spawn.sh checks
+# the mode= value against its own explicit --mode before launching, and records
+# the branch= value into state/<id>.meta's own branch= field.
 case "$MODE" in
   direct-PR)
     SETUP2=""
     RULE1='1. Never push to the default branch (push only your `'"$BRANCH"'` branch). Never merge a PR.'
     IFS= read -r -d '' DOD <<EOF || true
 # Definition of done
-Delivery contract: mode=direct-PR
+Delivery contract: mode=direct-PR branch=$BRANCH
 This task ships **direct-PR**: you raise the PR yourself, without the no-mistakes pipeline.
 The task is complete only when committed on your branch.
 When it is implemented and committed, push your branch and open a PR with \`gh-axi\`, then append \`done: PR {url}\` to the status file and stop.
@@ -434,7 +437,7 @@ EOF
     RULE1="1. Never push to any remote and never open a PR. Work only on your \`$BRANCH\` branch; firstmate handles the merge into local \`main\`."
     IFS= read -r -d '' DOD <<EOF || true
 # Definition of done
-Delivery contract: mode=local-only
+Delivery contract: mode=local-only branch=$BRANCH
 This task ships **local-only**: no remote, no PR, no pipeline.
 The task is complete only when committed on your branch \`$BRANCH\`. Do NOT push, do NOT open a PR, do NOT merge.
 Keep your branch a clean fast-forward onto the current default branch - if \`main\` has advanced, rebase onto it so the eventual merge stays a fast-forward.
@@ -448,7 +451,7 @@ EOF
     RULE1='1. Never push to the default branch. Never merge a PR.'
     IFS= read -r -d '' DOD <<EOF || true
 # Definition of done
-Delivery contract: mode=no-mistakes
+Delivery contract: mode=no-mistakes branch=$BRANCH
 The task is complete only when committed on your branch.
 When you believe it is complete, append \`done: {summary}\` to the status file and stop.
 Firstmate will then instruct you to run /no-mistakes to validate and ship a PR.

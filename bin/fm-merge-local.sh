@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 # Perform the approved local merge for a local-only ship task: fast-forward the
-# project's default branch to the crewmate's fm/<id> branch.
+# project's default branch to the crewmate's branch.
+#
+# The branch name comes from state/<id>.meta's branch= field, written by
+# bin/fm-spawn.sh from the brief's machine-readable "Delivery contract:
+# ... branch=<name>" line (bin/fm-brief.sh's --branch, substituted verbatim
+# into the brief the crewmate actually checks out). A task with no recorded
+# branch= (e.g. one created before this field existed, or promoted via
+# bin/fm-promote.sh, which instructs the crewmate to use fm/<id> literally)
+# falls back to fm/<id>.
 #
 # This is firstmate's merge gate-action (the captain's merge authority applied
 # locally instead of via a GitHub PR). It is the one sanctioned exception to hard
@@ -47,8 +55,14 @@ default_branch() {
   return 1
 }
 
-BRANCH="fm/$ID"
-git -C "$PROJ" rev-parse --verify --quiet "refs/heads/$BRANCH" >/dev/null || { echo "error: branch $BRANCH does not exist in $PROJ" >&2; exit 1; }
+BRANCH=$(grep '^branch=' "$META" | tail -1 | cut -d= -f2- || true)
+if [ -n "$BRANCH" ]; then
+  BRANCH_SRC="recorded"
+else
+  BRANCH="fm/$ID"
+  BRANCH_SRC="default"
+fi
+git -C "$PROJ" rev-parse --verify --quiet "refs/heads/$BRANCH" >/dev/null || { echo "error: branch $BRANCH ($BRANCH_SRC) does not exist in $PROJ" >&2; exit 1; }
 
 DEFAULT=$(default_branch) || { echo "error: cannot determine default branch for $PROJ; expected origin/HEAD, main, or master" >&2; exit 1; }
 
