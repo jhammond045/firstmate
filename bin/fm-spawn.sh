@@ -205,6 +205,12 @@
 # A ship task records the explicit mode/yolo it was passed; a secondmate spawn records
 # mode=secondmate, yolo=off, home=, and projects=; a scout records neither, and both the
 # success line and state/<id>.meta omit them.
+# A ship task also records state/<id>.meta's branch= field: the branch value
+# parsed from the brief's "Delivery contract: mode=<mode> branch=<branch>"
+# line (fm-brief.sh's --branch, absent only for a brief scaffolded before that
+# line recorded a branch), or, on --relaunch, the branch already recorded in
+# the task's existing meta. bin/fm-merge-local.sh reads it to resolve which
+# branch to land, falling back to fm/<id> when it is absent.
 # Every fresh spawn or relaunch records a new spawn_gen= incarnation token so durable
 # consumers can distinguish a replacement worker that reuses the same task id.
 # When the home session's frozen trace-context decision is enabled (see
@@ -299,6 +305,7 @@ EFFORT=
 BACKEND_ARG=
 MODE=
 YOLO=
+BRANCH=
 TRACEPARENT_ARG=
 HARNESS_SET=0
 MODEL_SET=0
@@ -1052,6 +1059,7 @@ if [ "$RELAUNCH" -eq 1 ]; then
   [ -n "$KIND" ] || KIND=ship
   MODE=$(fm_meta_get "$RELAUNCH_META" mode)
   YOLO=$(fm_meta_get "$RELAUNCH_META" yolo)
+  BRANCH=$(fm_meta_get "$RELAUNCH_META" branch)
   RELAUNCH_WT=$(fm_meta_get "$RELAUNCH_META" worktree)
   [ -n "$RELAUNCH_WT" ] && [ -d "$RELAUNCH_WT" ] || {
     echo "error: task $ID's recorded worktree '${RELAUNCH_WT:-none}' is missing; refusing to relaunch without the local copy its work lives in" >&2
@@ -1699,9 +1707,15 @@ delivery_rigor_rank() {  # <mode> -> 3 (most rigor) .. 1 (least); 0 = not a task
 }
 
 # Brief/spawn delivery agreement, checked before any endpoint exists.
-# fm-brief.sh records a ship brief's mode as a fixed "Delivery contract: mode=<mode>"
-# line. A spawn that disagrees would launch a worker whose instructions and whose
-# recorded task delivery differ, which is the exact drift this contract prevents.
+# fm-brief.sh records a ship brief's mode and branch as a fixed "Delivery
+# contract: mode=<mode> branch=<branch>" line. A spawn that disagrees on mode
+# would launch a worker whose instructions and whose recorded task delivery
+# differ, which is the exact drift this contract prevents. The branch value
+# is recorded into meta below (state/<id>.meta's branch= field) so
+# bin/fm-merge-local.sh can resolve the branch this task was actually briefed
+# with; on a relaunch, BRANCH is already set from the existing meta above and
+# wins over a fresh brief parse, so a relaunched task's recorded branch never
+# regresses to whatever the (unchanged) brief file still says.
 if [ "$KIND" = ship ]; then
   PROJ_NAME=$(basename "$PROJ_ABS")
   BRIEF_MODE=$(sed -n 's/^Delivery contract: mode=\([^ ]*\).*$/\1/p' "$BRIEF" | head -n 1)
@@ -1710,6 +1724,9 @@ if [ "$KIND" = ship ]; then
   elif [ "$BRIEF_MODE" != "$MODE" ]; then
     echo "error: delivery mismatch for $ID: the brief says mode=$BRIEF_MODE but this spawn passed --mode $MODE; correct the flag or re-scaffold the brief so the worker's instructions and the task record agree" >&2
     exit 1
+  fi
+  if [ -z "$BRANCH" ]; then
+    BRANCH=$(sed -n 's/^Delivery contract: mode=[^ ]* branch=\([^ ]*\).*$/\1/p' "$BRIEF" | head -n 1)
   fi
   # The registry holds the captain's standing posture, so dropping below it is
   # allowed (a current explicit captain instruction wins) but never silent. An
@@ -2684,10 +2701,12 @@ fi
 if [ "$KIND" = secondmate ]; then
   MODE=secondmate
   YOLO=off
+  BRANCH=
   : "${SECONDMATE_PROJECTS:=}"
 elif [ "$KIND" = scout ]; then
   MODE=
   YOLO=
+  BRANCH=
 fi
 
 # Resolve the optional default-off W3C trace context (bin/fm-trace-context-lib.sh,
@@ -2733,7 +2752,7 @@ fi
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
-      split("window endpoint_task_id worktree project harness kind mode yolo tasktmp model effort busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
+      split("window endpoint_task_id worktree project harness kind mode yolo branch tasktmp model effort busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
     !($1 in owned)
@@ -2748,6 +2767,7 @@ preserve_relaunch_meta() {
   echo "kind=$KIND"
   [ -z "$MODE" ] || echo "mode=$MODE"
   [ -z "$YOLO" ] || echo "yolo=$YOLO"
+  [ -z "$BRANCH" ] || echo "branch=$BRANCH"
   echo "tasktmp=$TASK_TMP"
   echo "model=${MODEL:-default}"
   echo "effort=${EFFORT:-default}"

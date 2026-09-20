@@ -207,8 +207,8 @@ test_ship_modes_generate_clean_briefs() {
     brief="$home/data/$id/brief.md"
     assert_present "$brief" "$id: brief was not scaffolded"
     assert_grep "# Definition of done" "$brief" "$id: brief missing Definition of done section"
-    grep -qx "Delivery contract: mode=$mode" "$brief" \
-      || fail "$id: brief did not record its machine-readable delivery contract line"
+    grep -qx "Delivery contract: mode=$mode branch=fix/$id/probe" "$brief" \
+      || fail "$id: brief did not record its machine-readable delivery contract line with its branch"
     assert_grep "{TASK}" "$brief" "$id: brief missing the {TASK} placeholder"
     assert_grep "mid-task \`working:\` line (including setup complete) is nonterminal" "$brief" \
       "$id: brief missing nonterminal working:/setup-complete gate protection"
@@ -281,6 +281,8 @@ test_ship_branch_is_required_and_substituted() {
     "the generated brief does not name the branch it was given"
   assert_no_grep 'fm/branch-ok' "$brief" \
     "the generated brief fell back to a silent fm/<task-id> branch default"
+  grep -qx "Delivery contract: mode=local-only branch=fix/JIRA-77/short-description" "$brief" \
+    || fail "the delivery contract line does not record the machine-readable branch=, so bin/fm-spawn.sh cannot resolve it into state/<id>.meta"
   pass "fm-brief.sh: ship --branch is required, refused off ship briefs, and substituted verbatim"
 }
 
@@ -294,7 +296,7 @@ test_ship_mode_is_explicit_not_registry() {
   FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-explicit-a5 direct-proj --mode no-mistakes --branch fix/brief-explicit-a5/probe >/dev/null 2>&1 \
     || fail "explicit no-mistakes brief on a direct-PR project should scaffold"
   brief="$home/data/brief-explicit-a5/brief.md"
-  grep -qx "Delivery contract: mode=no-mistakes" "$brief" \
+  grep -qx "Delivery contract: mode=no-mistakes branch=fix/brief-explicit-a5/probe" "$brief" \
     || fail "registered direct-PR posture overrode the explicit --mode"
   assert_grep "Firstmate will then instruct you to run /no-mistakes" "$brief" \
     "explicit no-mistakes brief did not render the pipeline definition of done"
@@ -302,7 +304,7 @@ test_ship_mode_is_explicit_not_registry() {
   # An unregistered project is not a blocker either, because nothing is looked up.
   FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-explicit-a6 never-registered --mode local-only --branch fix/brief-explicit-a6/probe >/dev/null 2>&1 \
     || fail "unregistered project should still scaffold from the explicit mode"
-  grep -qx "Delivery contract: mode=local-only" "$home/data/brief-explicit-a6/brief.md" \
+  grep -qx "Delivery contract: mode=local-only branch=fix/brief-explicit-a6/probe" "$home/data/brief-explicit-a6/brief.md" \
     || fail "unregistered project did not honour the explicit --mode"
   pass "fm-brief.sh: the explicit ship mode wins over the registered posture"
 }
