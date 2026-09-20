@@ -99,6 +99,27 @@ make_spawn_case() {
   printf '%s\n' "$case_dir|$home|$proj|$wt|$fakebin|$launchlog"
 }
 
+# Like make_spawn_case, but scaffolds the task's brief for real through
+# bin/fm-brief.sh (--mode/--branch) instead of a placeholder text file, so the
+# brief carries the real machine-readable "Delivery contract: mode=<mode>
+# branch=<branch>" line fm-spawn.sh parses into meta.
+make_spawn_case_with_brief() {
+  local name=$1 harness=$2 id=$3 mode=$4 branch=$5 case_dir home proj wt fakebin launchlog
+  case_dir="$TMP_ROOT/$name"
+  home="$case_dir/home"
+  proj="$case_dir/project"
+  wt="$case_dir/wt"
+  launchlog="$case_dir/launch.log"
+  fakebin=$(make_spawn_fakebin "$case_dir/fake")
+  mkdir -p "$home/data" "$home/projects" "$home/state" "$home/config"
+  printf '%s\n' "$harness" > "$home/config/crew-harness"
+  fm_git_worktree "$proj" "$wt" "wt-$name"
+  touch "$home/state/.last-watcher-beat"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode "$mode" --branch "$branch" >/dev/null 2>&1 \
+    || fail "$name: fm-brief.sh scaffold failed"
+  printf '%s\n' "$case_dir|$home|$proj|$wt|$fakebin|$launchlog"
+}
+
 enable_dispatch_profile() {
   local home=$1
   printf '%s\n' '{"rules":[{"when":"current events","use":{"harness":"grok","model":"grok-4","effort":"high"}}],"default":{"harness":"codex","model":"gpt-5","effort":"medium"}}' \
@@ -848,6 +869,21 @@ test_non_claude_harness_ignores_config_dir() {
   pass "non-claude harnesses do not receive the claude CLAUDE_CONFIG_DIR prefix"
 }
 
+test_ship_spawn_records_briefed_branch_into_meta() {
+  local rec id branch out status
+  id=spawn-branch-meta-z17
+  branch=fix/probe/descriptive-name
+  rec=$(make_spawn_case_with_brief branch-meta claude "$id" local-only "$branch")
+  read_case_record "$rec"
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --mode local-only --yolo off)
+  status=$?
+  expect_code 0 "$status" "local-only spawn of a task briefed with a descriptive branch should succeed"
+  assert_grep "branch=$branch" "$HOME_DIR/state/$id.meta" \
+    "meta did not record the branch fm-brief.sh recorded in the Delivery contract line - bin/fm-merge-local.sh would fall back to fm/<id> instead of landing the briefed branch"
+  pass "a ship spawn records the briefed branch into state/<id>.meta's branch= field"
+}
+
 test_active_dispatch_profile_does_not_block_secondmate_launch() {
   local rec id sm out status
   id=profile-secondmate-z16
@@ -898,5 +934,6 @@ test_claude_forwards_firstmate_config_dir_when_set
 test_claude_omits_config_dir_prefix_when_unset
 test_non_claude_harness_ignores_config_dir
 test_active_dispatch_profile_does_not_block_secondmate_launch
+test_ship_spawn_records_briefed_branch_into_meta
 
 echo "# all fm-spawn-dispatch-profile tests passed"
