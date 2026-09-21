@@ -183,7 +183,12 @@
 # likewise reachable through the worktree-relative .firstmate/inbox and
 # .firstmate/status symlinks that this script writes, so the brief's own
 # steering-inbox and status-reporting instructions never name an absolute path
-# either. Claude's --system-prompt-snapshot defaults to recording the prompt
+# either. A fresh spawn's state/<task-id>.status is pre-created empty (a
+# relaunch's real one is left alone) before that symlink is written, so a
+# worker that checks for it before its first append never reads absence as
+# evidence the brief is fake; an aborted launch that never reached a real
+# append removes that empty file again so a failed spawn leaves nothing
+# behind. Claude's --system-prompt-snapshot defaults to recording the prompt
 # once per conversation and replaying it verbatim on resume, so a later edit to
 # BRIEF only reaches a genuinely fresh process (a relaunch), never a resumed one.
 # Verified per-harness turn-end hooks are installed automatically where enabled; some live outside the worktree.
@@ -697,6 +702,7 @@ SPAWN_META_LOCK_HELD=0
 SPAWN_META_PUBLISH_STARTED=0
 SPAWN_TASK_SET_LOCK=
 SPAWN_TASK_SET_LOCK_HELD=0
+SPAWN_STATUS_ABORT_CLEANUP=0
 RELAUNCH_REPLACEMENT_PENDING=0
 RELAUNCH_REPLACEMENT_BUSY_GEN=
 RELAUNCH_REPLACEMENT_HARNESS=
@@ -811,6 +817,18 @@ spawn_abort_cleanup() {
     fm_lock_release "$SPAWN_CONTROL_LOCK" || true
   fi
   [ -z "$SPAWN_META_TMP" ] || rm -f "$SPAWN_META_TMP" 2>/dev/null || true
+  # Only remove the status file this spawn attempt itself created (never one
+  # inherited from an earlier incarnation), and only while it is still empty:
+  # a non-empty file means the worker already started reporting real status,
+  # which an aborted launch must not destroy. This leaves a failed launch no
+  # worse than before it ran.
+  if [ "$SPAWN_STATUS_ABORT_CLEANUP" = 1 ]; then
+    SPAWN_STATUS_ABORT_CLEANUP=0
+    if [ -n "${STATE_REAL:-}" ] && [ -n "${ID:-}" ] \
+       && [ -f "$STATE_REAL/$ID.status" ] && [ ! -s "$STATE_REAL/$ID.status" ]; then
+      rm -f "$STATE_REAL/$ID.status" 2>/dev/null || true
+    fi
+  fi
   if [ "$CONFIG_INHERIT_LOCK_HELD" = 1 ]; then
     CONFIG_INHERIT_LOCK_HELD=0
     fm_lock_release "$CONFIG_INHERIT_LOCK" || true
@@ -2395,6 +2413,17 @@ esac
 # broken path.
 mkdir -p "$STATE_REAL/$ID.inbox/handled"
 ln -sfn "$STATE_REAL/$ID.inbox" "$WT/.firstmate/inbox"
+# Pre-create the status file itself, empty, so its absence can never read as
+# evidence the dispatch is fake (a cautious worker seeing no file at all has
+# twice inferred a genuine brief was bogus and stalled instead of starting).
+# Empty, not a placeholder line: fm-classify-lib.sh treats a missing/blank
+# status file as no signal, so this can never be mistaken for a wake event.
+# Only created when absent, so a relaunch's real history is never touched, and
+# only THIS spawn's own fresh empty file is eligible for abort cleanup below.
+if [ ! -e "$STATE_REAL/$ID.status" ]; then
+  : > "$STATE_REAL/$ID.status"
+  SPAWN_STATUS_ABORT_CLEANUP=1
+fi
 ln -sfn "$STATE_REAL/$ID.status" "$WT/.firstmate/status"
 exclude_path '.firstmate'
 
@@ -2945,6 +2974,12 @@ if [ "${HERDR_PROJECTED:-0}" -eq 1 ]; then
   spawn_herdr_presentation_order_lock_release
 fi
 spawn_send_key "$T" Enter
+# The agent is live from here: any later exit (kimi's own readiness/delivery
+# checks below, each of which appends its own failed: line first) must never
+# delete the status file out from under a process that may already be writing
+# to it. Clearing this before the final success line would leave it armed
+# across that whole window.
+SPAWN_STATUS_ABORT_CLEANUP=0
 if [ "$HARNESS" = kimi ]; then
   if ! kimi_wait_for_ready; then
     kimi_spawn_fail "kimi did not show a verified ready signal before brief delivery"

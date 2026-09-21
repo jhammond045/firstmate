@@ -397,6 +397,19 @@ test_relaunch_appends_the_progress_note_to_the_instructions() {
   pass "fm-control relaunch: the progress note lands in the instructions the replacement reads"
 }
 
+test_relaunch_preserves_an_already_written_status_file() {
+  local dir out rc before
+  dir=$(new_case status-preserve rl30)
+  add_ship_task "$dir" rl30 claude
+  before='working: reproduced the bug before the stall'
+  printf '%s\n' "$before" > "$dir/home/state/rl30.status"
+  out=$(run_control "$dir" rl30 relaunch --note "swapping harness after a stall"); rc=$?
+  expect_code 0 "$rc" "relaunch over an already-reporting task should succeed"$'\n'"$out"
+  [ "$(cat "$dir/home/state/rl30.status")" = "$before" ] \
+    || fail "bin/fm-spawn.sh's status-file pre-create must never touch a relaunch's real status history"
+  pass "fm-control relaunch: a task's real status history survives a relaunch untouched"
+}
+
 test_relaunch_requires_a_note_for_a_ship_task() {
   local dir out rc before
   dir=$(new_case nonote rl3)
@@ -1321,6 +1334,7 @@ test_relaunch_preserves_durable_task_metadata
 test_relaunch_serializes_concurrent_durable_metadata_publication
 test_disabled_relaunch_clears_prior_trace_context
 test_relaunch_appends_the_progress_note_to_the_instructions
+test_relaunch_preserves_an_already_written_status_file
 test_relaunch_requires_a_note_for_a_ship_task
 test_harness_switch_moves_the_record_and_clears_prior_wiring
 test_harness_switch_does_not_carry_the_old_profile_axes

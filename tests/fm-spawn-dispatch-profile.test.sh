@@ -212,6 +212,13 @@ test_brief_and_steering_channels_land_inside_the_worktree() {
   [ -L "$WT_DIR/.firstmate/status" ] || fail "spawn did not create a worktree-relative status alias"
   [ "$(readlink "$WT_DIR/.firstmate/status")" = "$state_real/$id.status" ] \
     || fail "the status alias does not point at the task's real status file"
+  # A crewmate that checks for the status file before its own first append must
+  # never find it absent: an absent file has twice been read as evidence a
+  # genuine dispatch was fake. It must also start empty, never a placeholder
+  # line the watcher could mistake for a real event.
+  [ -f "$state_real/$id.status" ] || fail "spawn did not pre-create the task's status file"
+  [ -s "$state_real/$id.status" ] \
+    && fail "the pre-created status file must start empty, not carry a placeholder line"
 
   assert_no_grep '.firstmate' <(git -C "$WT_DIR" status --porcelain) \
     "the .firstmate/ delivery files must never show up as untracked worktree changes"
@@ -228,6 +235,47 @@ test_brief_and_steering_channels_land_inside_the_worktree() {
     || fail "a move through the worktree-relative inbox alias did not reach the real inbox"
 
   pass "the brief, steering inbox, and status file are all reachable by relative path inside the worktree"
+}
+
+test_aborted_spawn_removes_its_own_empty_status_file() {
+  local rec id out status
+  id=profile-abort-status-z9
+  rec=$(make_spawn_case profile-abort-status claude "$id")
+  read_case_record "$rec"
+
+  # Force the busy-state arm (a step that runs after the status file is
+  # pre-created but before the launch succeeds) to time out, so the spawn
+  # aborts partway through without ever writing a real status line.
+  mkdir -p "$HOME_DIR/state/$id.busy-state.lock"
+
+  out=$(FM_BUSY_LOCK_STALE_SECS=9999 run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 1 "$status" "a spawn that fails after wiring must still report failure"
+  assert_contains "$out" "failed to arm the busy-state contract" \
+    "expected the forced busy-state lock timeout to be the failure that aborted the spawn"
+
+  [ -e "$HOME_DIR/state/$id.status" ] \
+    && fail "an aborted spawn must not leave behind the empty status file it pre-created"
+  pass "an aborted fresh spawn cleans up the still-empty status file it pre-created"
+}
+
+test_aborted_spawn_never_touches_a_preexisting_status_file() {
+  local rec id out status before
+  id=profile-abort-status-keep-z9
+  rec=$(make_spawn_case profile-abort-status-keep claude "$id")
+  read_case_record "$rec"
+
+  before='working: left over from an earlier attempt'
+  printf '%s\n' "$before" > "$HOME_DIR/state/$id.status"
+  mkdir -p "$HOME_DIR/state/$id.busy-state.lock"
+
+  out=$(FM_BUSY_LOCK_STALE_SECS=9999 run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 1 "$status" "a spawn that fails after wiring must still report failure"
+
+  [ "$(cat "$HOME_DIR/state/$id.status")" = "$before" ] \
+    || fail "an aborted spawn must never touch a status file it did not create itself"
+  pass "an aborted spawn leaves a pre-existing status file's real content untouched"
 }
 
 test_non_cursor_launch_clears_inherited_cursor_markers() {
@@ -904,6 +952,8 @@ test_active_dispatch_profile_does_not_block_secondmate_launch() {
 
 test_no_profile_keeps_claude_profile_defaults
 test_brief_and_steering_channels_land_inside_the_worktree
+test_aborted_spawn_removes_its_own_empty_status_file
+test_aborted_spawn_never_touches_a_preexisting_status_file
 test_non_cursor_launch_clears_inherited_cursor_markers
 test_relative_home_overrides_launch_with_absolute_cross_process_paths
 test_home_defaults_preserve_absolute_or_resolve_relative_paths

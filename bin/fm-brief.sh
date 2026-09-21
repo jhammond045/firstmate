@@ -56,6 +56,9 @@
 # declared-external-wait verb (FM_CLASSIFY_PAUSED_VERB, default "paused") from
 # "blocked:": pause for a known external wait expected to clear on its own,
 # blocked when firstmate must act.
+# Every scaffold also tells the worker its status file already exists, created
+# empty at launch by bin/fm-spawn.sh, so a worker that checks before its first
+# append never reads the file's absence as evidence the dispatch is fake.
 # The ship and scout status rules also carry the foreground-wait contract next
 # to it: poll a check inside one foreground bash until-loop (~150s sleep) and
 # never end a turn on a backgrounded wait, a scheduled task, or a "check back
@@ -216,6 +219,12 @@ shell_quote() {
 STATUS_FILE=.firstmate/status
 INBOX_DIR=.firstmate/inbox
 
+# One-line reassurance against a real failure mode: a cautious worker that
+# finds no status file yet reasons a genuine dispatch would have created one,
+# and stalls instead of starting (bin/fm-spawn.sh precreates it empty at
+# launch precisely so this reasoning has no foothold).
+STATUS_FILE_NOTE="$STATUS_FILE already exists, created empty when you were spawned - its presence (or a first read finding it empty) is not evidence of anything, just append to it as usual."
+
 # The receive-and-ack half of the steering-inbox contract, included in every
 # scaffold kind. The record format, doorbell line, and re-ring ladder are
 # owned by bin/fm-task-inbox-lib.sh; the doorbell itself is self-describing,
@@ -298,6 +307,7 @@ $INBOX_SECTION
 Handle routine work yourself.
 Report only true captain-relevant outcomes or a declared external wait by appending one line:
    \`echo "{state}: {one short line}" >> $STATUS_FILE\`
+$STATUS_FILE_NOTE
 States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.
 Use \`$PAUSED_VERB: {why}\` (distinct from \`blocked:\`) only when your domain is deliberately idling on a known external wait you expect to clear on its own; use \`blocked:\` when you are stuck and need firstmate to act.
 Use this only for material phase changes, a captain decision, a real blocker, a failure, work ready for review, or work you landed.
@@ -382,6 +392,7 @@ The report is the only thing that survives, so anything worth keeping must be in
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
 4. Report status by appending one line:
    \`echo "{state}: {one short line}" >> $STATUS_FILE\`
+   $STATUS_FILE_NOTE
    States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.
    Each append wakes firstmate, so report sparingly: only phase changes a supervisor
    would act on and the needs-decision/blocked/paused/done/failed states. No step-by-step
@@ -500,6 +511,7 @@ $RULE1
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
 4. Report status by appending one line:
    \`echo "{state}: {one short line}" >> $STATUS_FILE\`
+   $STATUS_FILE_NOTE
    States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.
    Each append wakes firstmate, so report sparingly: only phase changes a supervisor
    would act on (setup done, bug reproduced, fix implemented, validation passed) and the
