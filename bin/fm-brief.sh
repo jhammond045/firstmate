@@ -52,6 +52,21 @@
 # report rather than a merge, and a charter is not a delivery contract.
 # There is no --yolo flag here. The worker never owns merge decisions, so yolo is
 # a spawn-time and firstmate-side input only (AGENTS.md section 7).
+# Every ship brief's definition of done states what delivery is in that mode, so
+# "done" cannot mean one thing to the crew and another to the supervisor reading
+# its status log. For direct-PR, done means the PR is open with its full https://
+# URL in the status line and a local commit is not delivery; for local-only the
+# commit on the named branch IS the delivery. no-mistakes is the two-stop mode:
+# its handoff uses the distinct nonterminal verb owned by bin/fm-classify-lib.sh
+# (FM_CLASSIFY_PIPELINE_HANDOFF_VERB, "ready-for-pipeline") so a mid-protocol
+# handoff is never confusable with a finished task, and only its terminal
+# "done: PR <url> checks green" means delivered. That definition also says the
+# crew's own passing typecheck/test/lint prove the change WORKS, not that it
+# SHIPPED, because from inside a worktree green local gates and shipped delivery
+# look identical. Each ship mode's status protocol carries a matching pre-done
+# self-check that looks from OUTSIDE the worktree, where that blind spot is. The
+# no-mistakes one is scoped to that mode's final done line, since its earlier
+# handoff legitimately precedes both the push and the pipeline.
 # Every scaffold's status protocol distinguishes the configured
 # declared-external-wait verb (FM_CLASSIFY_PAUSED_VERB, default "paused") from
 # "blocked:": pause for a known external wait expected to clear on its own,
@@ -97,6 +112,7 @@ esac
 # shellcheck source=bin/fm-classify-lib.sh
 . "$SCRIPT_DIR/fm-classify-lib.sh"
 PAUSED_VERB=${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}
+HANDOFF_VERB=$FM_CLASSIFY_PIPELINE_HANDOFF_VERB
 
 resolve_directory_input() {
   local name=$1 path=$2 resolved
@@ -432,39 +448,61 @@ fi
 # the branch= value into state/<id>.meta's own branch= field.
 case "$MODE" in
   direct-PR)
+    STATES_EXTRA=""
     SETUP2=""
     RULE1='1. Never push to the default branch (push only your `'"$BRANCH"'` branch). Never merge a PR.'
+    IFS= read -r -d '' DONE_SELFCHECK <<EOF || true
+Before you claim done, run the cheap check that looks from OUTSIDE this worktree, which is
+   where the blind spot is: \`git ls-remote origin 'refs/heads/$BRANCH'\`. If it returns nothing,
+   the branch was never pushed, there is no PR, and you are not done.
+EOF
     IFS= read -r -d '' DOD <<EOF || true
 # Definition of done
 Delivery contract: mode=direct-PR branch=$BRANCH
 This task ships **direct-PR**: you raise the PR yourself, without the no-mistakes pipeline.
-The task is complete only when committed on your branch.
+Done means the PR is open and its full \`https://\` URL is in your status line. A local commit is not delivery: nothing has shipped until the branch is pushed and the PR exists, however green your own tests are.
 When it is implemented and committed, push your branch and open a PR with \`gh-axi\`, then append \`done: PR {url}\` to the status file and stop.
 Do NOT run /no-mistakes. The configured merge authority decides whether to merge the PR; firstmate relays the outcome.
 EOF
     ;;
   local-only)
+    STATES_EXTRA=""
     SETUP2=""
     RULE1="1. Never push to any remote and never open a PR. Work only on your \`$BRANCH\` branch; firstmate handles the merge into local \`main\`."
+    IFS= read -r -d '' DONE_SELFCHECK <<EOF || true
+Before you claim done, confirm the delivery you owe actually exists: \`git status --short\` is
+   clean and \`git log --oneline main..$BRANCH\` lists your commits. Uncommitted work is not delivery.
+EOF
     IFS= read -r -d '' DOD <<EOF || true
 # Definition of done
 Delivery contract: mode=local-only branch=$BRANCH
 This task ships **local-only**: no remote, no PR, no pipeline.
-The task is complete only when committed on your branch \`$BRANCH\`. Do NOT push, do NOT open a PR, do NOT merge.
+Done means the work is committed on your branch \`$BRANCH\`. This is the one mode where a local commit IS the delivery, so do NOT push, do NOT open a PR, do NOT merge.
 Keep your branch a clean fast-forward onto the current default branch - if \`main\` has advanced, rebase onto it so the eventual merge stays a fast-forward.
 When it is implemented and committed, append \`done: ready in branch $BRANCH\` to the status file and stop.
 The configured merge authority approves the ready branch, then firstmate merges it into local \`main\` through the guarded fast-forward path.
 EOF
     ;;
   *)  # no-mistakes
+    STATES_EXTRA=" This mode adds one more, \`$HANDOFF_VERB\`, defined under Definition of done:
+   it marks the implementation handoff so a supervisor never reads it as a finished task."
+    IFS= read -r -d '' DONE_SELFCHECK <<EOF || true
+Before your FINAL \`done: PR {url} checks green\` line - not the handoff that precedes it, where
+   both of these are expected to fail - run the two cheap checks that look from OUTSIDE this
+   worktree, which is where the blind spot is; from inside it, "my tests pass" and "this shipped"
+   feel identical:
+   - \`git ls-remote origin 'refs/heads/$BRANCH'\` returns nothing -> it was never pushed.
+   - \`test -d "\$(git rev-parse --show-toplevel)/.no-mistakes"\` fails -> the pipeline never ran.
+EOF
     SETUP2="
 2. Run \`no-mistakes doctor\`; if it reports the repo is not initialized here, run \`no-mistakes init\`."
     RULE1='1. Never push to the default branch. Never merge a PR.'
     IFS= read -r -d '' DOD <<EOF || true
 # Definition of done
 Delivery contract: mode=no-mistakes branch=$BRANCH
-The task is complete only when committed on your branch.
-When you believe it is complete, append \`done: {summary}\` to the status file and stop.
+Done means the PR is open and its full \`https://\` URL is in your status line. A local commit is not delivery.
+Your own \`typecheck\`/\`test\`/\`lint\` passing is evidence the change WORKS, not evidence it SHIPPED. They are not the pipeline and they cannot open a PR; only the no-mistakes pipeline does that.
+This mode has two stops, and the first one is a handoff, not the finish line. It gets its OWN verb so a supervisor scanning the status log can tell it from a finished task: when the implementation is committed, append \`$HANDOFF_VERB: {summary}\` to the status file and stop. Do not write \`done:\` here.
 Firstmate will then instruct you to run /no-mistakes to validate and ship a PR.
 
 You drive no-mistakes by responding to its gates, not by implementing fixes.
@@ -478,7 +516,7 @@ Two firstmate-specific rules layer on top of that guidance:
   When the decision comes back, feed it to the gate with \`no-mistakes axi respond\` and let the pipeline apply it - do not route the question to "the user" or implement the fix yourself.
 - Avoid \`--yes\`: it would silently bypass firstmate's authority check and any required captain escalation.
 
-After /no-mistakes reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge), append \`done: PR {url} checks green\` and stop. You are finished.
+After /no-mistakes reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge), append \`done: PR {url} checks green\` and stop. That is the second stop, the only one that means delivered, and you are finished.
 EOF
     ;;
 esac
@@ -487,6 +525,7 @@ esac
 # $(...) command substitution used to strip. Drop that one newline so generated
 # briefs stay byte-identical to the historical Bash 5 output.
 DOD=${DOD%$'\n'}
+DONE_SELFCHECK=${DONE_SELFCHECK%$'\n'}
 
 cat > "$BRIEF" <<EOF
 This is a task from firstmate. You're working it solo - there's no one to check in with mid-task, so carry it through the steps below on your own judgment and use the escalation path when you genuinely need a decision.
@@ -512,13 +551,13 @@ $RULE1
 4. Report status by appending one line:
    \`echo "{state}: {one short line}" >> $STATUS_FILE\`
    $STATUS_FILE_NOTE
-   States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.
+   States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.$STATES_EXTRA
    Each append wakes firstmate, so report sparingly: only phase changes a supervisor
    would act on (setup done, bug reproduced, fix implemented, validation passed) and the
    needs-decision/blocked/paused/done/failed states. No step-by-step FYI progress lines;
    firstmate reads your pane for that.
    A mid-task \`working:\` line (including setup complete) is nonterminal: do not end the
-   turn after it; continue the same stage until a defined \`done:\` gate under Definition of done.
+   turn after it; continue the same stage until a stopping line your Definition of done defines.
    Use \`$PAUSED_VERB: {why}\` - distinct from \`blocked:\` - ONLY when you are deliberately idling on a
    known external wait you expect to clear on its own (an upstream release, a rate-limit reset,
    a scheduled window): firstmate then leaves your idle pane alone and rechecks it on a long
@@ -529,6 +568,7 @@ $RULE1
    Task section asks for a written record - a report file, a summary doc - write it before you
    exit, not after: it is part of the deliverable, not an epilogue, and work that's done but not
    reported is not done.
+   $DONE_SELFCHECK
 5. If you hit the same obstacle twice, append \`blocked: {why}\` and stop; firstmate will help.
 6. If a decision belongs above the implementation worker (product choices, destructive actions, ask-user findings),
    append \`needs-decision: {summary of options}\` and stop. Firstmate will reply with the decision.

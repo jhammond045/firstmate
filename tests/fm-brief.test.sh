@@ -841,6 +841,82 @@ test_waiting_contract_scoped_by_variant() {
   pass "fm-brief.sh: foreground-wait contract lands on ship and scout, not secondmate"
 }
 
+# From inside a worktree, green local gates and shipped delivery look identical,
+# so a crew can append `done:` on work that was never pushed and read it as
+# success. Each ship mode's definition of done must therefore say what delivery
+# is in that mode, and each must carry the matching pre-done self-check that
+# looks from outside the worktree. The no-mistakes-only sentences must not leak
+# into the other modes, and its self-check must be scoped to that mode's final
+# done line, because its earlier handoff legitimately precedes push and pipeline.
+test_done_means_delivered_per_mode() {
+  local nm pr lo
+  FM_HOME="$BRIEF_HOME" "$ROOT/bin/fm-brief.sh" brief-done-nm beta \
+    --mode no-mistakes --branch fix/brief-done-nm/probe >/dev/null 2>&1 \
+    || fail "fm-brief.sh no-mistakes scaffold exited non-zero"
+  FM_HOME="$BRIEF_HOME" "$ROOT/bin/fm-brief.sh" brief-done-pr beta \
+    --mode direct-PR --branch fix/brief-done-pr/probe >/dev/null 2>&1 \
+    || fail "fm-brief.sh direct-PR scaffold exited non-zero"
+  FM_HOME="$BRIEF_HOME" "$ROOT/bin/fm-brief.sh" brief-done-lo beta \
+    --mode local-only --branch fix/brief-done-lo/probe >/dev/null 2>&1 \
+    || fail "fm-brief.sh local-only scaffold exited non-zero"
+  nm="$BRIEF_HOME/data/brief-done-nm/brief.md"
+  pr="$BRIEF_HOME/data/brief-done-pr/brief.md"
+  lo="$BRIEF_HOME/data/brief-done-lo/brief.md"
+
+  # The PR-producing modes define done as the open PR with its full URL.
+  local b
+  for b in "$nm" "$pr"; do
+    assert_grep 'Done means the PR is open and its full' "$b" \
+      "$b: definition of done does not say done means the PR is open"
+    assert_grep 'URL is in your status line' "$b" \
+      "$b: definition of done does not require the full URL in the status line"
+    assert_grep 'A local commit is not delivery' "$b" \
+      "$b: definition of done does not say a local commit is not delivery"
+    assert_grep "git ls-remote origin 'refs/heads/" "$b" \
+      "$b: status protocol missing the never-pushed self-check"
+  done
+
+  # local-only is the one mode where the commit IS the delivery, so it must not
+  # claim a PR it is forbidden from opening.
+  assert_no_grep 'Done means the PR is open' "$lo" \
+    "local-only brief claims done means an open PR, which that mode forbids"
+  assert_grep 'This is the one mode where a local commit IS the delivery' "$lo" \
+    "local-only brief does not say what delivery is in this mode"
+
+  # The pipeline sentences and the pipeline-never-ran check are no-mistakes only.
+  assert_grep 'evidence the change WORKS, not evidence it SHIPPED' "$nm" \
+    "no-mistakes brief does not distinguish the crew's own passing tests from delivery"
+  assert_grep 'only the no-mistakes pipeline does that' "$nm" \
+    "no-mistakes brief does not say the pipeline is what produces the PR"
+  assert_grep '/.no-mistakes"` fails -> the pipeline never ran' "$nm" \
+    "no-mistakes brief missing the pipeline-never-ran self-check"
+  assert_grep 'not the handoff that precedes it' "$nm" \
+    "no-mistakes self-check is not scoped to the final done line, so the briefed handoff reads as a failure"
+
+  # The two-stop mode's handoff carries its own nonterminal verb, so a supervisor
+  # scanning the status log never reads it as a finished task. The terminal line
+  # is unchanged, and the other single-step modes never mention the verb.
+  assert_grep 'ready-for-pipeline: {summary}' "$nm" \
+    "no-mistakes handoff does not use the distinct pipeline-handoff verb"
+  assert_no_grep 'done: {summary}' "$nm" \
+    "no-mistakes handoff still writes a done: line, which is indistinguishable from completion"
+  assert_grep 'done: PR {url} checks green' "$nm" \
+    "no-mistakes terminal line changed; only it means delivered"
+  assert_grep 'This mode adds one more' "$nm" \
+    "no-mistakes States list does not name the handoff verb the brief tells the crew to write"
+  for b in "$pr" "$lo"; do
+    assert_no_grep 'ready-for-pipeline' "$b" \
+      "$b: single-step mode mentions the two-stop handoff verb"
+  done
+  for b in "$pr" "$lo"; do
+    assert_no_grep 'evidence the change WORKS, not evidence it SHIPPED' "$b" \
+      "$b: carries the no-mistakes-only tests-vs-shipped sentence"
+    assert_no_grep 'the pipeline never ran' "$b" \
+      "$b: carries the no-mistakes-only pipeline self-check"
+  done
+  pass "fm-brief.sh: each ship mode defines done as its own delivery, with a matching self-check"
+}
+
 test_script_parses
 test_no_heredoc_in_command_substitution
 test_help_includes_entire_header
@@ -864,3 +940,4 @@ test_pause_verb_override_renders_all_brief_scaffolds
 test_scout_and_secondmate_load_decision_hold_policy
 test_scout_and_secondmate_scaffold
 test_waiting_contract_scoped_by_variant
+test_done_means_delivered_per_mode

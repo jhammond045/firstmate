@@ -2,7 +2,8 @@
 # fm-crew-state.sh - deterministic read of a crew's CURRENT state.
 #
 # Why this exists: state/<id>.status is an append-only, best-effort EVENT LOG.
-# Crews append only wake-worthy transitions (done/needs-decision/blocked/paused/failed)
+# Crews append only wake-worthy transitions
+# (done/ready-for-pipeline/needs-decision/blocked/paused/failed)
 # and nothing when they silently resume, so `tail -1` of that log reports the
 # last EVENT, not the current STATE. After firstmate resolves a needs-decision
 # or blocked and the crew resumes (responds to the gate, the pipeline fixes, it
@@ -144,6 +145,7 @@ map_log_state() {  # <line>
     needs-decision) echo parked ;;
     blocked)        echo blocked ;;
     done)           echo "done" ;;
+    "$FM_CLASSIFY_PIPELINE_HANDOFF_VERB") echo parked ;;
     failed)         echo failed ;;
     *)              echo unknown ;;
   esac
@@ -559,11 +561,12 @@ if [ "$HAVE_RUN" = 1 ]; then
     fi
   fi
 
-  # Reconcile the status log. A needs-decision/blocked log line that the run-step
-  # has moved past (anything but a genuinely parked run) is deterministically
-  # stale: the gate resolved and the run resumed or finished.
+  # Reconcile the status log. A needs-decision/blocked/ready-for-pipeline log line
+  # that the run-step has moved past (anything but a genuinely parked run) is
+  # deterministically stale: the gate resolved, or the pipeline this crew was
+  # waiting to be handed was triggered, and the run resumed or finished.
   case "$LOG_VERB" in
-    needs-decision|blocked)
+    needs-decision|blocked|"$FM_CLASSIFY_PIPELINE_HANDOFF_VERB")
       if [ "$RUN_STATE" != parked ]; then
         if [ "$RUN_STATE" = working ]; then
           RUN_DETAIL="$RUN_DETAIL${SEP}status-log superseded by active run"

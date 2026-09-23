@@ -62,7 +62,20 @@ unset _fm_classify_nounset
 # verb-aware: a nonterminal working: or paused: line never becomes captain-relevant
 # merely because its prose contains one of those tokens (for example
 # "working: rebased onto merged #76").
-FM_CLASSIFY_CAPTAIN_RE_DEFAULT='done:|needs-decision:|blocked:|failed:|PR ready|checks green|ready in branch|merged'
+#
+# The no-mistakes pipeline handoff verb. A no-mistakes ship task has TWO stops:
+# the crew commits its implementation and stops for firstmate to trigger
+# validation, then finishes with `done: PR <url> checks green` once CI is green.
+# Both stops used to be written `done:`, so a supervisor scanning a status log -
+# or anything matching on the verb - could not tell a mid-protocol handoff from a
+# finished task without opening the brief and checking the mode. This verb is the
+# discriminator. It is deliberately NOT in status_is_terminal_verb below, because
+# the task is not over; it IS captain-relevant, because firstmate must see it to
+# send the validation trigger, and missing that trigger is what the ambiguity
+# cost. A home that overrides FM_CAPTAIN_RE wholesale must include this verb in
+# its own vocabulary or the handoff stops waking firstmate.
+FM_CLASSIFY_PIPELINE_HANDOFF_VERB='ready-for-pipeline'
+FM_CLASSIFY_CAPTAIN_RE_DEFAULT="done:|needs-decision:|blocked:|failed:|${FM_CLASSIFY_PIPELINE_HANDOFF_VERB}:|PR ready|checks green|ready in branch|merged"
 
 # The deliberate-external-wait verb. A crew (or firstmate steering it) appends
 #   paused: <reason>
@@ -130,7 +143,7 @@ status_is_captain_relevant() {
   esac
   if [ -z "${FM_CAPTAIN_RE+x}" ]; then
     case "$verb" in
-      done|needs-decision|blocked|failed) return 0 ;;
+      done|needs-decision|blocked|failed|"$FM_CLASSIFY_PIPELINE_HANDOFF_VERB") return 0 ;;
     esac
   fi
   printf '%s' "$line" | grep -qiE "${FM_CAPTAIN_RE:-$FM_CLASSIFY_CAPTAIN_RE_DEFAULT}"
@@ -158,6 +171,16 @@ status_is_captain_held() {  # <status-line>
   [ -n "$line" ] || return 1
   verb=$(status_line_verb "$line")
   [ "$verb" = "${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}" ]
+}
+
+# 0 if a status line's leading verb is the no-mistakes pipeline handoff verb. The
+# same pure verb read as status_is_paused, and the discriminator that separates a
+# no-mistakes crew's mid-protocol handoff from a finished task: both stops used to
+# read `done:`, so a supervisor could only tell them apart by opening the brief.
+status_is_pipeline_handoff() {  # <status-line>
+  local line=$1
+  [ -n "$line" ] || return 1
+  [ "$(status_line_verb "$line")" = "$FM_CLASSIFY_PIPELINE_HANDOFF_VERB" ]
 }
 
 # 0 if a status line declares either an external-wait pause or a verified
@@ -1182,9 +1205,11 @@ EOF
 
 # Fold material routed-work phases in the same keyed event stream.
 # A working or declared-pause event opens or replaces one phase for its key.
-# A later done, failed, needs-decision, blocked, or resolved event carrying that
-# key closes the phase, because it has moved to a terminal or separately tracked
-# state.
+# A later done, failed, needs-decision, blocked, ready-for-pipeline, or resolved
+# event carrying that key closes the phase, because it has moved to a terminal or
+# separately tracked state. The pipeline handoff closes it too: the crew has
+# stopped and is waiting on firstmate, so its working phase is over even though
+# the task is not.
 # A bare legacy event uses the default key, preserving one-phase behavior.
 # This fold is evidence about whether a parent event was explicitly superseded.
 # It is never authoritative current crew state, and consumers must not let an open
@@ -1206,7 +1231,7 @@ _fm_status_open_activities_stream() {
         [ -n "$open" ] && open="${open}"$'\n'
         open="${open}${key}"$'\t'"${verb}"$'\t'"${note}"$'\n'
         ;;
-      done|failed|needs-decision|blocked|"$resolve"|"$held")
+      done|failed|needs-decision|blocked|"$FM_CLASSIFY_PIPELINE_HANDOFF_VERB"|"$resolve"|"$held")
         open=$(_fm_decision_drop "$open" "$key")
         [ -n "$open" ] && open="${open}"$'\n'
         ;;

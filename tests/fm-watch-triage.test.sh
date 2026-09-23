@@ -261,6 +261,20 @@ test_classifier_primitives() {
     || fail "done: not a terminal verb"
   status_is_terminal_verb "working: rebased onto merged #76" \
     && fail "working: wrongly classed as terminal verb"
+  # The no-mistakes pipeline handoff: firstmate must SEE it (missing the
+  # validation trigger is what the old ambiguity cost) but it must not read as a
+  # finished task, and it must survive correlation/key tokens between verb and
+  # colon exactly as the terminal verbs do.
+  status_is_captain_relevant "ready-for-pipeline: implemented and committed" \
+    || fail "pipeline handoff not captain-relevant; firstmate would never send the validation trigger"
+  status_is_terminal_verb "ready-for-pipeline: implemented and committed" \
+    && fail "pipeline handoff wrongly classed as a terminal verb"
+  status_is_pipeline_handoff "ready-for-pipeline: implemented and committed" \
+    || fail "pipeline handoff predicate did not recognize its own verb"
+  status_is_pipeline_handoff "done: PR https://x/pull/76 checks green" \
+    && fail "pipeline handoff predicate wrongly matched a terminal done line"
+  status_is_captain_relevant "ready-for-pipeline [key=impl]: implemented" \
+    || fail "pipeline handoff with a key tag lost its captain relevance"
   status_is_captain_relevant "merged" || fail "legacy bare merged free-text not captain-relevant"
   status_is_captain_relevant "PR ready https://x/pull/2" \
     || fail "legacy bare PR ready free-text not captain-relevant"
